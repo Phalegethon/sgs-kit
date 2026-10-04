@@ -1,0 +1,21 @@
+{
+  "name": "claude-kit",
+  "owner": { "name": "johnnyvizz", "url": "https://github.com/johnnyvizz" },
+  "metadata": { "description": "johnnyvizz's public Claude Code skills and mods." },
+  "plugins": [
+    {
+      "name": "savvy-flow",
+      "source": "./plugins/savvy-flow",
+      "description": "Skill: plan, delegate to tiered worker subagents, review.",
+      "version": "1.2.0",
+      "category": "skill"
+    },
+    {
+      "name": "savvy-progress",
+      "source": "./plugins/savvy-progress",
+      "description": "Mod: progress bar above the prompt and a live agents panel; made for savvy-flow, shows any subagents.",
+      "version": "1.2.0",
+      "category": "mod"
+    }
+  ]
+}

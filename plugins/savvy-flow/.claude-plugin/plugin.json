@@ -1,0 +1,10 @@
+{
+  "name": "savvy-flow",
+  "version": "1.2.0",
+  "description": "Orchestrated delivery flow: the session model plans, owns design and reviews; five tiered worker subagents implement. Pairs with the savvy-progress mod for a live progress bar and agents panel.",
+  "author": { "name": "johnnyvizz", "url": "https://github.com/johnnyvizz" },
+  "homepage": "https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-flow",
+  "repository": "https://github.com/johnnyvizz/claude-kit",
+  "license": "MIT",
+  "keywords": ["skill", "orchestration", "subagents"]
+}

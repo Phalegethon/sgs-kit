@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+# Generated per machine by /plugin-types
+.claude/types/
+**/.claude-plugin/types/
+tsconfig.json
