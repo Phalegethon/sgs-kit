@@ -1,10 +1,10 @@
 {
   "name": "savvy-progress",
-  "version": "1.2.0-sgs.2",
-  "description": "Progress bar above the prompt for /savvy-flow, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, cost and time. Fork: a session row above the prompt in every session (cost, tokens, context, rate limits, time) and a session panel, per-task model on planned rows, Turkish.",
+  "version": "1.2.0-sgs.3",
+  "description": "Session row above the prompt in every session (model, cost, tokens, context, 5-hour and 7-day limits, time) and a session panel (Details or /agents-info): cost split, usage limits, context by category, tokens by kind, cost by model, plus running, finished and planned subagents and the /savvy-flow progress bar. sgs-kit fork of johnnyvizz's savvy-progress.",
   "author": {
-    "name": "johnnyvizz",
-    "url": "https://github.com/johnnyvizz"
+    "name": "Gürkan Süerdem",
+    "url": "https://github.com/Phalegethon"
   },
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -21,7 +21,7 @@
       ]
     }
   },
-  "homepage": "https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress",
-  "repository": "https://github.com/johnnyvizz/claude-kit",
+  "homepage": "https://github.com/Phalegethon/sgs-kit/tree/main/plugins/savvy-progress",
+  "repository": "https://github.com/Phalegethon/sgs-kit",
   "license": "MIT"
 }

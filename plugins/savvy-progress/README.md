@@ -1,18 +1,14 @@
 # savvy-progress
 
-> **Fork (sgs-kit, 1.2.0-sgs.2).** Local changes on top of upstream `johnnyvizz/claude-kit`:
-> every session shows a **session row** above the prompt (model, cost, tokens, context fill, the 5-hour and
-> 7-day limits, session time) whose **Details** button opens the **session panel**: cost with the main
-> session/subagent split, usage limits with reset times, the context window by category, tokens by kind
-> with the cache hit rate, cost by model, then the subagents. Cost is the engine's own ledger (/cost) when the
-> host keeps one, else an API-equivalent estimate from token counts; never a bill.
-> planned tasks take an optional `model`/`effort` so a Haiku or Sonnet task is not shown as Opus,
-> while a reported flow runs any subagent opens the panel, and the panel speaks Turkish (`language: tr`).
-> Install: `claude plugin marketplace add <path to this repo>`, then `claude plugin install savvy-progress@sgs-kit`
-> and `claude plugin disable savvy-progress@claude-kit`. Upstream changes are merged by hand
-> (`git fetch upstream && git merge upstream/main`); pushing to upstream is disabled.
+> **sgs-kit fork (1.2.0-sgs.3)** of savvy-progress from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit).
+> It adds an always-on **session row** above the prompt (model, cost, tokens, context fill, the 5-hour and 7-day
+> limits, session time) whose **Details** button opens the **session panel**: cost with the main session /
+> subagent split, usage limits with reset times, the context window by category, tokens by kind with the cache
+> hit rate and cost by model, above the subagents. Cost is Claude Code's own ledger (/cost) when the host keeps
+> one, else an API-equivalent estimate from token counts; never a bill. Planned tasks may name their
+> `model`/`effort`, and the panel speaks Turkish (`language: tr`).
 
-A Claude Code mod: a progress bar above the prompt and a live panel of subagents. Made for the [savvy-flow](../savvy-flow) skill, and useful with any subagents.
+A Claude Code mod: a session row above the prompt, a progress bar and a live panel of the session and its subagents. Made for the [savvy-flow](../savvy-flow) skill, and useful with any subagents.
 
 - **Session row** (fork): always on; figures drop by priority as the band narrows, gauges turn amber at 70 % and red at 90 %, and the figure is always printed.
 - **Progress bar**: the flow's title, phase, accepted tasks out of planned, and a button with the crew size that opens the panel. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts.
