@@ -4,6 +4,17 @@ export type PlannedTask = {
   title: string
   tier: string
   after: number[]
+  /** The model the task will run on, when the orchestrator names it; the tier's default otherwise. */
+  model?: string
+  effort?: string
+}
+
+/** The main loop's own model requests: an API-equivalent estimate, never a bill. */
+export type MainUsage = {
+  model: string
+  tokens: number
+  costUsd: number
+  steps: number
 }
 
 export type Flow = {
@@ -53,6 +64,7 @@ declare module 'claude-code' {
       agents: AgentRun[]
       panel: Panel
       now: number
+      main: MainUsage
     }
   }
 }

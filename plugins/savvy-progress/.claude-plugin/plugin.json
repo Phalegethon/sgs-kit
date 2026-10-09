@@ -1,7 +1,7 @@
 {
   "name": "savvy-progress",
-  "version": "1.2.0",
-  "description": "Progress bar above the prompt for /savvy-flow, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, cost and time.",
+  "version": "1.2.0-sgs.1",
+  "description": "Progress bar above the prompt for /savvy-flow, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, cost and time. Fork: main-session API-equivalent cost, per-task model on planned rows, Turkish.",
   "author": {
     "name": "johnnyvizz",
     "url": "https://github.com/johnnyvizz"
@@ -11,12 +11,13 @@
     "language": {
       "type": "string",
       "title": "Panel language",
-      "description": "auto follows Claude Code's language setting, then the system locale",
+      "description": "auto follows Claude Code's language setting, then the system locale (en, ru, tr)",
       "default": "auto",
       "options": [
         "auto",
         "en",
-        "ru"
+        "ru",
+        "tr"
       ]
     }
   },

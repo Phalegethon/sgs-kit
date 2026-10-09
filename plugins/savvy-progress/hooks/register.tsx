@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
+import type { AgentRun, Flow, MainUsage, Panel, Phase, PlannedTask } from '../types'
 
 const flow = atom({ plugin: 'savvy-progress', key: 'flow' } as const, null)
 const agents = atom({ plugin: 'savvy-progress', key: 'agents' } as const, [])
@@ -11,6 +11,12 @@ const panel = atom({ plugin: 'savvy-progress', key: 'panel' } as const, {
   autoOpenedFor: '',
 })
 const now = atom({ plugin: 'savvy-progress', key: 'now' } as const, 0)
+const main = atom({ plugin: 'savvy-progress', key: 'main' } as const, {
+  model: '',
+  tokens: 0,
+  costUsd: 0,
+  steps: 0,
+} as MainUsage)
 
 const TOOL = 'mcp__savvy-progress__progress'
 const STEP_TOOL = 'mcp__savvy-progress__step'
@@ -25,14 +31,14 @@ type ProgressInput = {
   done?: number
   phase?: Phase
   finished?: boolean
-  tasks?: { title?: string; tier?: string; after?: number[] }[]
+  tasks?: { title?: string; tier?: string; after?: number[]; model?: string; effort?: string }[]
 }
 
 // ---------------------------------------------------------------------------
 // Language: the `language` option, else Claude Code's `language` setting, else the
-// process locale; English when nothing says Russian.
+// process locale; English when nothing says Russian or Turkish.
 
-type Lang = 'en' | 'ru'
+type Lang = 'en' | 'ru' | 'tr'
 
 const STRINGS = {
   en: {
@@ -62,6 +68,9 @@ const STRINGS = {
     tasks: 'Tasks',
     review: 'Review',
     busy: 'running',
+    mainSession: 'Main session',
+    subagents: 'Subagents',
+    estimate: '≈ API-equivalent estimate from token counts; not a bill',
   },
   ru: {
     pane: 'Агенты',
@@ -90,6 +99,40 @@ const STRINGS = {
     tasks: 'Задачи',
     review: 'Ревью',
     busy: 'в работе',
+    mainSession: 'Основная сессия',
+    subagents: 'Субагенты',
+    estimate: '≈ оценка по ценам API из числа токенов; не счёт',
+  },
+  tr: {
+    pane: 'Ajanlar',
+    cost: 'Maliyet',
+    tokens: 'Token',
+    time: 'Süre',
+    collapse: 'Daralt',
+    expand: 'Genişlet',
+    running: 'Çalışıyor',
+    finished: 'Bitti',
+    planned: 'Planlandı',
+    empty: 'Henüz alt ajan yok.',
+    round: 'tur',
+    failed: 'hata',
+    after: 'sonra',
+    tokensWord: 'token',
+    agentsCount: 'ajan',
+    isRunning: 'çalışıyor',
+    isFinished: 'bitti',
+    isPlanned: 'planlandı',
+    opened: 'Ajan paneli açıldı.',
+    closed: 'Ajan paneli kapandı.',
+    done: 'Bitti',
+    plan: 'Plan',
+    design: 'Tasarım',
+    tasks: 'Görevler',
+    review: 'İnceleme',
+    busy: 'çalışıyor',
+    mainSession: 'Ana oturum',
+    subagents: 'Alt ajanlar',
+    estimate: '≈ token sayısından API fiyatıyla tahmin; fatura değil',
   },
 } as const
 
@@ -97,18 +140,19 @@ const STRINGS = {
 let lang: Lang = 'en'
 const tr = () => STRINGS[lang]
 
-const isRussian = (v: unknown): boolean => typeof v === 'string' && /^(ru|russian|рус)/i.test(v.trim())
+const langOf = (v: unknown): Lang =>
+  typeof v !== 'string' ? 'en' : /^(ru|russian|рус)/i.test(v.trim()) ? 'ru' : /^(tr|turkish|türk)/i.test(v.trim()) ? 'tr' : 'en'
 
 async function detectLang($: EngineInterface, option: unknown): Promise<Lang> {
-  if (option === 'en' || option === 'ru') return option
+  if (option === 'en' || option === 'ru' || option === 'tr') return option
   try {
     const settings = (await $.settings.read()) as Record<string, unknown>
-    if (typeof settings.language === 'string' && settings.language.trim()) return isRussian(settings.language) ? 'ru' : 'en'
+    if (typeof settings.language === 'string' && settings.language.trim()) return langOf(settings.language)
   } catch {
     // No settings: fall through to the locale.
   }
   const locale = (await $.env.get('LC_ALL')) || (await $.env.get('LC_MESSAGES')) || (await $.env.get('LANG'))
-  return isRussian(locale) ? 'ru' : 'en'
+  return langOf(locale)
 }
 
 const blank = (): Flow => ({
@@ -131,6 +175,8 @@ const cleanTasks = (tasks: ProgressInput['tasks']): PlannedTask[] | undefined =>
       title: (t.title ?? '').trim(),
       tier: (t.tier ?? '').replace(/^savvy-/, '').trim().toLowerCase(),
       after: (t.after ?? []).filter(n => Number.isInteger(n) && n > 0),
+      ...(t.model?.trim() ? { model: t.model.trim().toLowerCase() } : {}),
+      ...(t.effort?.trim() ? { effort: t.effort.trim().toLowerCase() } : {}),
     }))
 
 const merge = (prev: Flow | null, input: ProgressInput): Flow => {
@@ -283,8 +329,9 @@ const TIER_COLOR: Record<string, string> = {
   other: '#888780',
 }
 
-// What each savvy tier runs on, for planned tasks that have no run yet.
 const colorOf = (tier: string): string => TIER_COLOR[tier] ?? '#888780'
+
+// What each savvy tier runs on, for planned tasks that have no run yet and name no model.
 
 const TIER_MODEL: Record<string, string> = {
   fable: 'Fable · high',
@@ -325,6 +372,10 @@ const costOf = (model: string, u: Usage): number => {
   )
 }
 
+// A planned task's model: the one the orchestrator named, else its tier's default.
+const plannedModel = (p: PlannedTask, tier: string): string =>
+  p.model ? `${modelName(p.model)}${p.effort ? ' · ' + p.effort : ''}` : (TIER_MODEL[tier] ?? '')
+
 const windowOf = (model: string): number => (/haiku/i.test(model) ? 200_000 : 1_000_000)
 
 // `savvy-careful`, or `savvy-flow:savvy-careful` when the agents ship in a plugin.
@@ -337,7 +388,11 @@ const tierOf = (type: string): string => {
 const modelName = (id: string): string => {
   const m = /(fable|mythos|opus|sonnet|haiku)-(\d+)(?:-(\d{1,2})(?!\d))?/i.exec(id)
   const [, family = '', major = '', minor] = m ?? []
-  if (!family) return id.replace(/^claude-/, '').replace(/\[.*\]$/, '') || '—'
+  if (!family) {
+    const bare = /^(fable|mythos|opus|sonnet|haiku)$/i.exec(id.trim())?.[1]
+    if (bare) return bare.charAt(0).toUpperCase() + bare.slice(1).toLowerCase()
+    return id.replace(/^claude-/, '').replace(/\[.*\]$/, '') || '—'
+  }
   return `${family.charAt(0).toUpperCase()}${family.slice(1).toLowerCase()} ${major}${minor ? '.' + minor : ''}`
 }
 
@@ -366,12 +421,14 @@ const plannedOf = (f: Flow | null, list: AgentRun[]): Planned[] => {
   return (f.tasks ?? []).map((t, i) => ({ ...t, n: i + 1 })).filter(t => !started.has(norm(t.title)))
 }
 
-const totals = (list: AgentRun[], at: number) => {
-  const cost = list.reduce((s, a) => s + a.costUsd, 0)
-  const tokens = list.reduce((s, a) => s + a.tokens, 0)
+// Subagents and the main loop, both priced from their token counts.
+const totals = (list: AgentRun[], at: number, m?: MainUsage) => {
+  const agentsCost = list.reduce((s, a) => s + a.costUsd, 0)
+  const mainCost = m?.costUsd ?? 0
+  const tokens = list.reduce((s, a) => s + a.tokens, 0) + (m?.tokens ?? 0)
   const start = Math.min(...list.map(a => a.startedAt))
   const end = Math.max(...list.map(a => a.endedAt ?? Math.max(at, a.startedAt)))
-  return { cost, tokens, time: list.length ? end - start : 0 }
+  return { cost: agentsCost + mainCost, agentsCost, mainCost, tokens, time: list.length ? end - start : 0 }
 }
 
 // --- desktop drawings: each row is one SVG, as the band above the prompt is.
@@ -518,7 +575,7 @@ const svg = (W: number, H: number, body: string): string =>
 const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): string => {
   const s = tr()
   const gap = 6
-  const tw = (W - gap * 2) / 3
+  const tw = (W - gap * 3) / 4
   const top = title ? 28 : 0
   const tile = (i: number, k: string, v: string) =>
     `<rect class="tile" x="${i * (tw + gap)}" y="${top}" width="${tw}" height="40" rx="8"/>
@@ -528,11 +585,12 @@ const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): stri
     W,
     headerHeight(title),
     `${title ? `<text class="t" x="0" y="15" font-family="${FONT}" font-size="14" font-weight="600">${xml(fitText(title, 14, W))}</text>` : ''}
-${tile(0, s.cost, '≈' + fmtCost(t.cost))}${tile(1, s.tokens, fmtTokens(t.tokens))}${tile(2, s.time, fmtTime(t.time))}`,
+${tile(0, s.mainSession, '≈' + fmtCost(t.mainCost))}${tile(1, s.subagents, '≈' + fmtCost(t.agentsCost))}${tile(2, s.tokens, fmtTokens(t.tokens))}${tile(3, s.time, fmtTime(t.time))}
+<text class="m" x="0" y="${top + 56}" font-family="${FONT}" font-size="10.5">${xml(fitText(`${s.cost} ≈${fmtCost(t.cost)} · ${s.estimate}`, 10.5, W))}</text>`,
   )
 }
 
-const headerHeight = (title: string): number => (title ? 72 : 44)
+const headerHeight = (title: string): number => (title ? 90 : 62)
 
 // The task's own progress when the worker reports steps; a finished run is full.
 const progressOf = (a: AgentRun): number | null => {
@@ -577,7 +635,7 @@ const plannedSvg = (W: number, p: Planned): string => {
   const tier = p.tier in TIER_COLOR ? p.tier : 'other'
   const color = colorOf(tier)
   const textW = W - 42 - 22
-  const meta = [TIER_MODEL[tier] ?? '']
+  const meta = [plannedModel(p, tier)]
   if (p.after.length) meta.push(`${tr().after} ${p.after.join(', ')}`)
   return svg(
     W,
@@ -667,6 +725,12 @@ export const register: Register = (on, options) => {
               properties: {
                 title: { type: 'string', description: 'A few words; reused verbatim as the Agent description.' },
                 tier: { type: 'string', enum: ['fable', 'heavy', 'careful', 'medium', 'light'] },
+                model: {
+                  type: 'string',
+                  enum: ['haiku', 'sonnet', 'opus', 'fable'],
+                  description: 'The model the task is delegated to, when it is not the tier default; shown on the planned row.',
+                },
+                effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
                 after: { type: 'array', items: { type: 'integer' }, description: 'Numbers of the tasks this one waits for.' },
               },
               required: ['title', 'tier'],
@@ -678,7 +742,7 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'step',
       description:
-        'For savvy-flow workers: report progress on your own task to the agents panel. ' +
+        'For subagents (savvy-flow workers or any other): report progress on your own task to the agents panel. ' +
         'Right after reading the brief, call it with `total` (your plan in 3-8 steps) and `done: 0`; ' +
         'call it again as each step finishes. Cheap and silent: it only draws a bar.',
       inputSchema: {
@@ -782,8 +846,10 @@ export const register: Register = (on, options) => {
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
     await update($, now, () => at)
-    if (e.subagentType.startsWith('savvy-')) {
-      const f = await read($, flow)
+    const f = await read($, flow)
+    const isActive = f !== null && !f.isFinished
+    // savvy workers open the panel; while a reported flow runs, any subagent does.
+    if (e.subagentType.startsWith('savvy-') || isActive) {
       await autoOpen($, f && !f.isFinished ? f.title : 'savvy-flow')
     }
     return started
@@ -794,7 +860,23 @@ export const register: Register = (on, options) => {
     const result = yield* next(e)
     const agentId = e.agentId
     const usage = result.usage
-    if (!agentId || !usage) return result
+    if (!usage) return result
+    if (!agentId) {
+      // The main loop: priced like a subagent so a subscription session sees its API-equivalent cost.
+      const model = usage.model || e.model
+      await update($, main, m => ({
+        model,
+        tokens:
+          m.tokens +
+          (usage.input_tokens || 0) +
+          (usage.output_tokens || 0) +
+          (usage.cache_read_input_tokens || 0) +
+          (usage.cache_creation_input_tokens || 0),
+        costUsd: m.costUsd + costOf(model, usage),
+        steps: m.steps + 1,
+      }))
+      return result
+    }
 
     const model = usage.model || e.model
     await update($, agents, list =>
@@ -871,7 +953,7 @@ export const register: Register = (on, options) => {
     const running = list.filter(a => a.status === 'running').reverse()
     const finished = list.filter(a => a.status !== 'running').reverse()
     const planned = plannedOf(f, list)
-    const t = totals(list, at)
+    const t = totals(list, at, await read($, main))
     // The pane's title says "Agents"; inside, only the flow's own name.
     const title = f && !f.isFinished ? f.title : ''
 
@@ -978,7 +1060,10 @@ export const register: Register = (on, options) => {
           {toggleCompact}
         </Box>
         <Text dimColor>
-          ≈{fmtCost(t.cost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+          {s.mainSession} ≈{fmtCost(t.mainCost)} · {s.subagents} ≈{fmtCost(t.agentsCost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+        </Text>
+        <Text dimColor wrap="truncate-end">
+          {s.estimate}
         </Text>
         {p.isCompact ? (
           <Text wrap="truncate-end">
@@ -1010,7 +1095,7 @@ export const register: Register = (on, options) => {
                   </Text>
                   <Text dimColor wrap="truncate-end">
                     {'  '}
-                    {tier} · {TIER_MODEL[tier] ?? ''}
+                    {tier} · {plannedModel(pl, tier)}
                     {pl.after.length ? ` · ${s.after} ${pl.after.join(', ')}` : ''}
                   </Text>
                 </Box>
