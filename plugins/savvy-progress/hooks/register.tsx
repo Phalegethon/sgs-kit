@@ -106,6 +106,8 @@ const STRINGS = {
     mainSession: 'Main session',
     subagents: 'Subagents',
     estimate: '≈ API-equivalent estimate from token counts; not a bill',
+    hideDone: 'Hide finished',
+    showDone: 'Show finished',
   },
   ru: {
     pane: 'Сессия',
@@ -165,6 +167,8 @@ const STRINGS = {
     mainSession: 'Основная сессия',
     subagents: 'Субагенты',
     estimate: '≈ оценка по ценам API из числа токенов; не счёт',
+    hideDone: 'Скрыть завершённые',
+    showDone: 'Показать завершённые',
   },
   tr: {
     pane: 'Oturum',
@@ -224,6 +228,8 @@ const STRINGS = {
     mainSession: 'Ana oturum',
     subagents: 'Alt ajanlar',
     estimate: '≈ token sayısından API fiyatıyla tahmin; fatura değil',
+    hideDone: 'Bitenleri gizle',
+    showDone: 'Bitenleri göster',
   },
 } as const
 
@@ -306,11 +312,9 @@ const noise = (x: number, y: number): number => {
 }
 
 // The whole row is one SVG: the desktop wraps sibling elements onto new lines,
-// so title, bar, percent and the crab live in one drawing; only the count and
-// the dismiss are Buttons beside it.
+// so title, bar, percent, the crab and the crew count live in one drawing.
 const H = 22
 const BAR_H = 16
-const CRAB_W = 26
 const CELL = 3
 const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
@@ -336,15 +340,19 @@ const fitText = (s: string, size: number, maxW: number): string => {
   return out + '…'
 }
 
-// `crew` is drawn beside the crab, a figure and not a control: a "×N" button next
-// to the dismiss read as a second close mark.
+// The right end reads "29%  🦀 2 agents": the crew is a figure, not a control.
 const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string => {
   // The title takes what it needs, up to 40% of the row; the bar takes the rest.
   const title = fitText(f.title, 13, Math.max(60, W * 0.4))
-  const crewW = crew ? Math.ceil(textWidth(String(crew), 12.5)) + 4 : 0
-  const crabX = W - crewW - CRAB_W + 1
+  const percent = fmtPct(ratio(f) * 100)
+  const crewWord = ` ${tr().agentsCount}`
+  const crewW = crew ? Math.ceil(textWidth(String(crew), 12.5) + textWidth(crewWord, 11.5)) : 0
+  // At 0.8 the crab's body spans x 2.4 to 21.6 of its box and y 8 to 21: lifted 3 px
+  // so it centres on the row's middle line, as the text and the bar do.
+  const crabX = Math.round(W - (crew ? crewW + 6 : 0) - 22)
+  const percentX = crabX - 4
   const BAR_X = Math.round(16 + textWidth(title, 13) + 12)
-  const BAR_W = Math.max(60, W - BAR_X - 46 - CRAB_W - crewW)
+  const BAR_W = Math.max(60, Math.round(percentX - textWidth(percent, 12.5) - 12 - BAR_X))
   const color = f.isFinished ? DONE : ACCENT
   const y0 = (H - BAR_H) / 2
   const fillW = Math.round(BAR_W * ratio(f))
@@ -377,7 +385,6 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string =>
   const text = label(f)
   const pillW = Math.round(18 + text.length * 6.6)
   const pillX = Math.max(0, Math.min(BAR_W - pillW, fillW - pillW))
-  const percent = fmtPct(ratio(f) * 100)
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <style>
@@ -402,9 +409,9 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string =>
 <rect x="${pillX}" width="${pillW}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${color}"/>
 <text x="${pillX + pillW / 2}" y="${BAR_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11" font-weight="600" fill="#ffffff">${xml(text)}</text>
 </g>
-<text class="m" x="${crabX - 7}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
-${CRAB_CSS}${crab(crabX, 0, 'other', false, isWorking, 0.8)}
-${crew ? `<text class="t" x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-weight="600" font-variant-numeric="tabular-nums">${crew}</text>` : ''}
+<text class="m" x="${percentX}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
+${CRAB_CSS}${crab(crabX, -3, 'other', false, isWorking, 0.8)}
+${crew ? `<text x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-variant-numeric="tabular-nums"><tspan class="t" font-size="12.5" font-weight="600">${crew}</tspan><tspan class="m" font-size="11.5">${xml(crewWord)}</tspan></text>` : ''}
 </svg>`
 }
 
@@ -970,17 +977,6 @@ ${txt(W - PAD, y, `≈${fmtCost(r.costUsd)} · ${fmtTokens(r.tokens)}`, { size: 
   )
 }
 
-const emptySvg = (W: number): string => {
-  const s = tr()
-  return svg(
-    W,
-    54,
-    `${crab(2, 10, 'other', true)}
-${txt(44, 24, s.empty, { size: 12.5, weight: 500, cls: 's' })}
-${txt(44, 41, fitText(s.emptyHint, 11, W - 46), { size: 11, cls: 'm' })}`,
-  )
-}
-
 // --- the band's session row: one SVG of labelled figures, dropped by priority as it narrows.
 
 type Seg = { prio: number; w: number; draw: (x: number) => string }
@@ -1041,8 +1037,9 @@ const bandText = (t: Totals, m: MainUsage, mt: Meter): string => {
 
 const BAND_GAP = 19
 
-// Returns the drawing and its width: the figures that fit, so the button sits right after them.
-const statsSvg = (W: number, segs: Seg[], isWorking: boolean): { source: string; width: number } => {
+// Returns the drawing and its width: the figures that fit, so the button sits right after them;
+// `padTo` widens it to the flow row's width, so the two rows' buttons share one column.
+const statsSvg = (W: number, segs: Seg[], isWorking: boolean, padTo = 0): { source: string; width: number } => {
   // Keep the most important figures that fit, then draw them in their own order.
   let used = 16
   const kept = new Set<Seg>()
@@ -1063,7 +1060,7 @@ const statsSvg = (W: number, segs: Seg[], isWorking: boolean): { source: string;
       return out
     })
     .join('')
-  const width = Math.ceil(x + 4)
+  const width = Math.max(Math.ceil(x + 4), padTo)
   return { source: svg(width, H, `<circle${isWorking ? ' class="live"' : ''} cx="5" cy="${H / 2}" r="4" fill="${isWorking ? ACCENT : DONE}"/>${body}`), width }
 }
 
@@ -1076,72 +1073,144 @@ const progressOf = (a: AgentRun): number | null => {
 
 const ctxOf = (a: AgentRun): number => (a.contextMax ? Math.min(100, Math.round((a.contextTokens / a.contextMax) * 100)) : 0)
 
-const agentSvg = (W: number, a: AgentRun, at: number, k = 1): string => {
+// --- the subagents card: one card stacked from several drawings (its header, group
+// labels and rows), each painting its own slice of the tile so they read as one, as
+// the cards above do. Rows sit flush; the first slice rounds the top corners and
+// the last the bottom ones, with a little room under it.
+
+type Slice = { source: string; height: number }
+type Part = { key: string; alt: string; draw: (isFirst: boolean, isLast: boolean) => Slice }
+
+const CARD_R = 10
+const CARD_FOOT = 8
+const ROW_X = PAD + 40
+
+const tileSlice = (W: number, H: number, isFirst: boolean, isLast: boolean): string => {
+  const t = isFirst ? CARD_R : 0
+  const b = isLast ? CARD_R : 0
+  return `<path class="tile" d="M0 ${t}${t ? `A${t} ${t} 0 0 1 ${t} 0` : ''}H${W - t}${t ? `A${t} ${t} 0 0 1 ${W} ${t}` : ''}V${H - b}${b ? `A${b} ${b} 0 0 1 ${W - b} ${H}` : ''}H${b}${b ? `A${b} ${b} 0 0 1 0 ${H - b}` : ''}Z"/>`
+}
+
+// `height` is the slice's own; the last one grows by the card's foot.
+const slice = (W: number, height: number, body: string) => (isFirst: boolean, isLast: boolean): Slice => {
+  const h = height + (isLast ? CARD_FOOT : 0)
+  return { source: svg(W, h, `${tileSlice(W, h, isFirst, isLast)}${body}`), height: h }
+}
+
+// A hairline between two rows of one group, inset as the card's text is.
+const rule = (W: number, isRuled: boolean): string => (isRuled ? `<line class="ln" x1="${PAD}" y1="0.5" x2="${W - PAD}" y2="0.5"/>` : '')
+
+const headPart = (W: number, right: string): Part => ({
+  key: 'agents-head',
+  alt: `${tr().subagents} ${right}`,
+  draw: slice(
+    W,
+    34,
+    `${txt(PAD, 22, tr().subagents, { size: 11.5, weight: 600, cls: 's' })}${right ? txt(W - PAD, 22, fitText(right, 11.5, W * 0.55), { size: 11.5, cls: 's', anchor: 'end', num: true }) : ''}`,
+  ),
+})
+
+const groupPart = (W: number, key: string, text: string): Part => ({
+  key,
+  alt: text,
+  draw: slice(W, 26, txt(PAD, 18, text, { size: 11, weight: 600, cls: 'm', num: true })),
+})
+
+const emptyPart = (W: number): Part => {
+  const s = tr()
+  return {
+    key: 'agents-empty',
+    alt: `${s.empty} ${s.emptyHint}`,
+    draw: slice(
+      W,
+      48,
+      `${crab(PAD - 4, 4, 'other', true)}
+${txt(ROW_X, 20, s.empty, { size: 12.5, weight: 500, cls: 's' })}
+${txt(ROW_X, 37, fitText(s.emptyHint, 11, W - ROW_X - PAD), { size: 11, cls: 'm' })}`,
+    ),
+  }
+}
+
+const agentPart = (W: number, a: AgentRun, at: number, k: number, isRuled: boolean): Part => {
   const s = tr()
   const tier = tierOf(a.type)
   const color = colorOf(tier)
   const ctx = ctxOf(a)
-  const textW = W - 42 - 22
+  const right = W - PAD
+  const barW = right - ROW_X
   const meta = [a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)]
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   if (a.status === 'failed') meta.push(s.failed)
-  const barW = textW
   const progress = progressOf(a)
   const stats = `ctx ${fmtPct(ctx)} · ${fmtTokens(a.contextTokens)}  ≈${fmtCost(a.costUsd * k)}  ${fmtTime(elapsed(a, at))}`
   const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' · ' + a.stepNote : ''}` : ''
   const stepsW = Math.max(0, barW - textWidth(stats, 11) - 12)
   // Without reported steps the bar falls back to the context, drawn grey.
   const fillW = Math.round(barW * (progress ?? ctx / 100))
-  return svg(
-    W,
-    66,
-    `${crab(0, 14, costumeOf(a.type), false, a.status === 'running')}
-<text class="t" x="42" y="18" font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(a.description || a.type, 13, textW))}</text>
-<text x="42" y="34" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
-${steps && stepsW > 30 ? `<text class="t" x="42" y="49" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(fitText(steps, 11, stepsW))}</text>` : ''}
-<text class="s" x="${42 + barW}" y="49" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${stats}</text>
-<rect class="k" x="42" y="55" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="42" y="55" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
-${statusMark(W - 8, 16, a.status, color)}
-<line class="ln" x1="0" y1="65.5" x2="${W}" y2="65.5"/>`,
-  )
+  return {
+    key: a.id,
+    alt: `${a.description}: ${modelName(a.model)}, ${a.status === 'running' ? s.isRunning : s.isFinished}`,
+    draw: slice(
+      W,
+      66,
+      `${rule(W, isRuled)}${crab(PAD - 4, 15, costumeOf(a.type), false, a.status === 'running')}
+${txt(ROW_X, 21, fitText(a.description || a.type, 13, barW - 22), { size: 13, weight: 600 })}
+<text x="${ROW_X}" y="37" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
+${steps && stepsW > 30 ? txt(ROW_X, 51, fitText(steps, 11, stepsW), { size: 11, num: true }) : ''}
+${txt(right, 51, stats, { size: 11, cls: 's', anchor: 'end', num: true })}
+<rect class="k" x="${ROW_X}" y="57" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="${ROW_X}" y="57" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
+${statusMark(right - 6, 17, a.status, color)}`,
+    ),
+  }
 }
 
-const plannedSvg = (W: number, p: Planned): string => {
+const plannedPart = (W: number, p: Planned, isRuled: boolean): Part => {
   const tier = p.tier in TIER_COLOR ? p.tier : 'other'
   const color = colorOf(tier)
-  const textW = W - 42 - 22
+  const right = W - PAD
   const meta = [plannedModel(p, tier)]
   if (p.after.length) meta.push(`${tr().after} ${p.after.join(', ')}`)
-  return svg(
-    W,
-    46,
-    `${crab(0, 6, tier, true)}
-<text class="s" x="42" y="18" font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(`${p.n}. ${p.title}`, 13, textW))}</text>
-<text x="42" y="34" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier)}</tspan><tspan class="m">  ${xml(meta.filter(Boolean).join('  ·  '))}</tspan></text>
-${statusMark(W - 8, 16, 'planned', color)}
-<line class="ln" x1="0" y1="45.5" x2="${W}" y2="45.5"/>`,
-  )
+  return {
+    key: `plan-${p.n}`,
+    alt: `${p.n}. ${p.title}: ${tr().isPlanned}`,
+    draw: slice(
+      W,
+      48,
+      `${rule(W, isRuled)}${crab(PAD - 4, 8, tier, true)}
+${txt(ROW_X, 21, fitText(`${p.n}. ${p.title}`, 13, right - ROW_X - 22), { size: 13, weight: 600, cls: 's' })}
+<text x="${ROW_X}" y="37" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier)}</tspan><tspan class="m">  ${xml(meta.filter(Boolean).join('  ·  '))}</tspan></text>
+${statusMark(right - 6, 17, 'planned', color)}`,
+    ),
+  }
 }
 
-const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: Totals): string => {
+const compactPart = (W: number, list: AgentRun[], planned: Planned[], t: Totals): Part => {
   const icons = [
     ...list.filter(a => a.status === 'running').map(a => ({ k: costumeOf(a.type), c: colorOf(tierOf(a.type)), s: 'running', dim: false })),
     ...list.filter(a => a.status !== 'running').map(a => ({ k: costumeOf(a.type), c: colorOf(tierOf(a.type)), s: a.status, dim: false })),
     ...planned.map(p => ({ k: p.tier in TIER_COLOR ? p.tier : 'other', c: colorOf(p.tier), s: 'planned', dim: true })),
   ]
-  const fit = Math.max(1, Math.floor((W - 150) / 36))
+  const fit = Math.max(1, Math.floor((W - PAD * 2 - 150) / 36))
   const shown = icons.slice(0, fit)
   const more = icons.length - shown.length
   const body = shown
-    .map((ic, i) => crab(i * 36, 0, ic.k, ic.dim, ic.s === 'running') + (ic.s === 'running' ? `<circle class="live" cx="${i * 36 + 32}" cy="4" r="3" fill="${ic.c}"/>` : ''))
+    .map(
+      (ic, i) =>
+        crab(PAD - 4 + i * 36, 4, ic.k, ic.dim, ic.s === 'running') +
+        (ic.s === 'running' ? `<circle class="live" cx="${PAD - 4 + i * 36 + 32}" cy="8" r="3" fill="${ic.c}"/>` : ''),
+    )
     .join('')
-  const x = shown.length * 36 + (more ? 4 : 0)
-  return svg(
-    W,
-    32,
-    `${body}${more ? `<text class="s" x="${x}" y="21" font-family="${FONT}" font-size="12">+${more}</text>` : ''}
-<text class="s" x="${W}" y="21" text-anchor="end" font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
-  )
+  const x = PAD - 4 + shown.length * 36 + (more ? 4 : 0)
+  return {
+    key: 'agents-compact',
+    alt: `${list.length} ${tr().agentsCount}`,
+    draw: slice(
+      W,
+      38,
+      `${body}${more ? txt(x, 25, `+${more}`, { cls: 's' }) : ''}
+${txt(W - PAD, 25, `≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}`, { cls: 's', anchor: 'end', num: true })}`,
+    ),
+  }
 }
 
 // --- terminal drawing: the same rows in text.
@@ -1312,6 +1381,16 @@ export const register: Register = (on, options) => {
       if (at - (m.breakdownAt ?? 0) > 15000 && (await isPaneOpen($))) void refreshBreakdown($)
     }
     return result
+  })
+
+  // The row has no dismiss: a finished flow's "Done" stays until the person's next
+  // prompt, then leaves. A background task's notification is not that prompt.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind !== 'task-notification') {
+      const f = await read($, flow)
+      if (f?.isFinished) await update($, flow, () => null)
+    }
+    return next(e)
   })
 
   // Main-loop turns only: a subagent's run raises no turn.start.
@@ -1560,37 +1639,45 @@ export const register: Register = (on, options) => {
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
       const W = Math.max(240, Math.min(900, (e.props.bodyColumns || 40) * 8 - 8))
-      const section = (key: string, text: string) => (
-        <Text key={key} dimColor>
-          {text}
-        </Text>
-      )
       const pct = mt.contextPercent
       const ctxAlt = pct === undefined ? s.noReading : `${fmtPct(pct)}, ${fmtTokens(mt.contextTokens ?? 0)} / ${fmtTokens(mt.contextWindow)}`
       const limitsAlt = mt.rateLimits.map(r => `${rateLabel(r.kind, false)} ${fmtPct(r.percentUsed)}`).join(', ')
 
-      let agentsBody
-      if (isEmpty) agentsBody = <Svg key="empty" source={emptySvg(W)} alt={`${s.empty} ${s.emptyHint}`} width={W} height={54} />
-      else if (p.isCompact)
-        agentsBody = <Svg key="compact" source={compactSvg(W, list, planned, t)} alt={`${list.length} ${s.agentsCount}`} width={W} height={32} />
-      else
-        agentsBody = (
-          <Box key="rows" flexDirection="column">
-            {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
-            {running.map(a => (
-              <Svg key={a.id} source={agentSvg(W, a, at, t.k)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
-            ))}
-            {finished.length > 0 && toggleDone}
-            {!p.isDoneCollapsed &&
-              finished.map(a => (
-                <Svg key={a.id} source={agentSvg(W, a, at, t.k)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />
-              ))}
-            {planned.length > 0 && section('h-plan', `${s.planned} · ${planned.length}`)}
-            {planned.map(pl => (
-              <Svg key={`plan-${pl.n}`} source={plannedSvg(W, pl)} alt={`${pl.n}. ${pl.title}: ${s.isPlanned}`} width={W} height={46} />
-            ))}
-          </Box>
-        )
+      // The subagents card: header, then a labelled group per state, each row its own slice.
+      const parts: Part[] = [headPart(W, list.length ? `${list.length} ${s.agentsCount} · ≈${fmtCost(t.agentsCost)}` : '')]
+      if (isEmpty) parts.push(emptyPart(W))
+      else if (p.isCompact) parts.push(compactPart(W, list, planned, t))
+      else {
+        if (running.length) parts.push(groupPart(W, 'g-run', `${s.running} · ${running.length}`))
+        running.forEach((a, i) => parts.push(agentPart(W, a, at, t.k, i > 0)))
+        if (finished.length) parts.push(groupPart(W, 'g-done', `${s.finished} · ${finished.length}`))
+        if (!p.isDoneCollapsed) finished.forEach((a, i) => parts.push(agentPart(W, a, at, t.k, i > 0)))
+        if (planned.length) parts.push(groupPart(W, 'g-plan', `${s.planned} · ${planned.length}`))
+        planned.forEach((pl, i) => parts.push(plannedPart(W, pl, i > 0)))
+      }
+      const agentsCard = (
+        <Box key="agents" flexDirection="column">
+          {parts.map((part, i) => {
+            const drawn = part.draw(i === 0, i === parts.length - 1)
+            return <Svg key={part.key} source={drawn.source} alt={part.alt} width={W} height={drawn.height} />
+          })}
+        </Box>
+      )
+      // The card's controls sit under it, from its left edge: text buttons, as Details is.
+      const agentsControls = isEmpty ? null : (
+        <Box key="agents-controls" flexDirection="row" gap={2}>
+          {toggleCompact}
+          {finished.length > 0 && !p.isCompact ? (
+            <Button
+              key="done"
+              label={p.isDoneCollapsed ? s.showDone : s.hideDone}
+              plain
+              dimColor
+              onPress={() => update($, panel, prev => ({ ...prev, isDoneCollapsed: !prev.isDoneCollapsed }))}
+            />
+          ) : null}
+        </Box>
+      )
 
       return (
         <Box flexDirection="column" gap={1}>
@@ -1609,8 +1696,8 @@ export const register: Register = (on, options) => {
             <Svg source={modelsSvg(W, models)} alt={`${s.byModel}: ${models.map(r => `${r.name} ≈${fmtCost(r.costUsd)}`).join(', ')}`} width={W} height={modelsHeight(models.length)} />
           )}
           <Text dimColor>{s.estimate}</Text>
-          {agentsHeader}
-          {agentsBody}
+          {agentsCard}
+          {agentsControls}
         </Box>
       )
     }
@@ -1765,16 +1852,15 @@ export const register: Register = (on, options) => {
     const crew = f ? flowRuns(f, list).length + plannedOf(f, list).length : 0
     const crewText = crew ? `${crew} ${s.agentsCount}` : ''
     const percent = f ? fmtPct(ratio(f) * 100) : ''
-    const dismiss = <Button key="savvy-dismiss" label="✕" plain role="dismiss" onPress={() => update($, flow, () => null)} />
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
-      // About 8 CSS px per reported column; the rest is the button and its gap
-      // (Details on the stats row, the dismiss on the flow row).
+      // About 8 CSS px per reported column; the rest is Details and its gap. Both
+      // rows take the same slot, so their right edges line up.
       // No floor above the slot: a row wider than it would wrap.
       const cols = e.props.bodyColumns || 100
-      const stats = statsSvg(Math.max(180, Math.min(1600, cols * 8 - 120)), bandSegs(t, m, mt), isWorking)
-      const flowW = Math.max(180, Math.min(1600, cols * 8 - 64))
+      const flowW = Math.max(180, Math.min(1600, cols * 8 - 120))
+      const stats = statsSvg(flowW, bandSegs(t, m, mt), isWorking, f ? flowW : 0)
       return (
         <Box flexDirection="column">
           <Box key="savvy-stats" flexDirection="row" alignItems="center" gap={1}>
@@ -1789,7 +1875,6 @@ export const register: Register = (on, options) => {
                 width={flowW}
                 height={H}
               />
-              {dismiss}
             </Box>
           )}
         </Box>
@@ -1829,7 +1914,6 @@ export const register: Register = (on, options) => {
               <Text dimColor>{crewText}</Text>
             </Text>
           ) : null}
-          {dismiss}
         </Box>
       </Box>
     )

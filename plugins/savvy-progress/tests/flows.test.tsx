@@ -75,6 +75,9 @@ test('a new flow keeps the subagents of the one before', { options: { language: 
   expect(desktop).toContain('Subagents ≈$2.00')
   expect(desktop).toContain('Research odds')
   expect(desktop).not.toContain('No subagents yet')
+  // The subagents card: its header sums the runs, its controls sit under it.
+  expect(desktop).toContain('2 agents · ≈$2.00')
+  expect(desktop).toContain('"label":"Hide finished"')
 
   const terminal = JSON.stringify(await $.ui.render(pane('terminal')))
   expect(terminal).toContain('"$2.00"')
@@ -109,6 +112,8 @@ test('the flow row counts only its own crew and draws no × button', { options: 
   expect(desktop).not.toMatch(/"label":"×\d+"/)
   // This flow's crew: one run plus two planned tasks; the earlier flow's two runs are not in it.
   expect(desktop).toContain('3 agents')
+  // No dismiss on the row: Details is the band's only button.
+  expect(desktop.match(/"type":"Button"/g)?.length).toBe(1)
 
   const terminal = JSON.stringify(await $.ui.render(band('terminal')))
   expect(terminal).not.toMatch(/×\d/)
@@ -118,4 +123,25 @@ test('the flow row counts only its own crew and draws no × button', { options: 
   // "Research odds" ran in the earlier flow: here it is still planned.
   expect(panel).toContain('Planned · 2')
   expect(panel).toContain('1. Research odds: planned')
+})
+
+test('a finished flow stays until the next prompt, a notification leaves it', { options: { language: 'en' } }, async ($, on) => {
+  engine(on)
+  on('clock.now', async () => ({ value: 1_000_000 }))
+  on('prompt.submit', async (_$, e) => ({ text: e.text }))
+  await $.session.start({ cwd: '/tmp', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__savvy-progress__progress', title: 'Research', total: 1, phase: 'delegate' } as never)
+  await runAgent($, 'u1', 'Research odds')
+  await $.tool.call({ tool: 'mcp__savvy-progress__progress', done: 1, finished: true } as never)
+  expect(JSON.stringify(await $.ui.render(band('desktop')))).toContain('Research: Done')
+
+  await $.prompt.submit({ text: 'agent done', wait: false, origin: { kind: 'task-notification' } } as never)
+  expect(JSON.stringify(await $.ui.render(band('desktop')))).toContain('Research: Done')
+
+  await $.prompt.submit({ text: 'next', wait: false, origin: { kind: 'composer' } } as never)
+  const after = JSON.stringify(await $.ui.render(band('desktop')))
+  expect(after).not.toContain('Research')
+  // The run and its cost outlive the row.
+  const panel = JSON.stringify(await $.ui.render(pane('desktop')))
+  expect(panel).toContain('Subagents ≈$1.00')
 })
