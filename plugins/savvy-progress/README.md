@@ -10,6 +10,12 @@
 
 A Claude Code mod: a session row above the prompt, a progress bar and a live panel of the session and its subagents. Made for the [savvy-flow](../savvy-flow) skill, and useful with any subagents.
 
+<img src="../../docs/savvy-progress/band.png" alt="The session row above a savvy-flow progress bar at 3 of 6 tasks, with 7 agents" width="1010">
+
+<img src="../../docs/savvy-progress/panel.png" alt="The session panel: cost split, usage limits, context window, tokens, cost by model and the subagents card" width="542">
+
+Drawn by the mod's own rendering code with sample data; more in the [repository README](../../README.md#what-savvy-progress-looks-like).
+
 - **Session row** (fork): always on; figures drop by priority as the band narrows, gauges turn amber at 70 % and red at 90 %, and the figure is always printed.
 - **Progress bar**: the flow's title, phase, accepted tasks out of planned, and the flow's crew size (its runs plus the tasks still planned) beside the crab. The band follows the window: on a narrow one the row drops the word "agents", then the percent, then shortens the title. A finished flow shows Done until your next prompt, then leaves; there is no dismiss, so nothing can hide a running flow. Subagents belong to the session: a new flow keeps the runs of earlier ones, so their cost stays in the totals. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts.
 - **Session panel** (`/agents-info` or the row's Details button toggles it): the session cards above, then a subagents card of running, finished and planned subagents with model, effort, task progress, context, estimated cost and time, with Collapse and Hide finished under it. Working crabs walk, and each savvy tier animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.

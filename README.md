@@ -11,6 +11,22 @@ sgs-kit is a fork of [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claud
 
 savvy-flow and savvy-progress work on their own and light up together: with both installed, the flow drives the progress bar and workers report their progress to the panel.
 
+## What savvy-progress looks like
+
+The session row and a savvy-flow progress bar above the prompt, in the desktop Code tab:
+
+<img src="docs/savvy-progress/band.png" alt="The session row (model, cost, tokens, context, 5-hour and 7-day limits, elapsed time, Details) above a progress bar for the flow 'Checkout redesign' at 3 of 6 tasks, 50%, with 7 agents" width="1010">
+
+The **Details** button opens the session panel: cost split, usage limits, context window, tokens, cost by model and a card of running, finished and planned subagents, each savvy tier in its own costume.
+
+<img src="docs/savvy-progress/panel.png" alt="The session panel: session cost $4.86 split between the main session and subagents, usage limits, context window by category, tokens by kind, cost by model, and the subagents card" width="542">
+
+The row follows the window: on a narrow one it drops figures by priority, then the word "agents", then the percent.
+
+<img src="docs/savvy-progress/band-narrow.png" alt="The same band at 64 and 40 columns" width="562">
+
+The images are drawn by the mod's own rendering code with sample data.
+
 ## What the fork adds
 
 savvy-progress `1.2.0-sgs.*`:
