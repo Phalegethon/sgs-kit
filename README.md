@@ -51,6 +51,30 @@ In Claude Code:
 
 Restart the session afterwards. Plugin skills and agents are namespaced: the skill is `/savvy-flow:savvy-flow`, the agents `savvy-flow:savvy-careful` and so on.
 
+### Updating
+
+Plugins from a third-party marketplace such as sgs-kit do not update on their own: Claude Code turns background auto-update on only for Anthropic's official marketplaces, and a marketplace cannot turn it on for you. Either switch it on once, or update by hand.
+
+**Auto-update, once:** in `/plugin`, go to **Marketplaces**, select **sgs-kit** and select **Enable auto-update**. Claude Code then checks a few minutes after your first message in a session and says `Plugin updated: <name> · Run /reload-plugins to apply`; the new version also loads on your next launch.
+
+**By hand:** refresh the catalog, then update each plugin:
+
+```bash
+claude plugin marketplace update sgs-kit
+```
+
+```bash
+claude plugin update savvy-progress@sgs-kit
+```
+
+```bash
+claude plugin update savvy-flow@sgs-kit
+```
+
+Then run `/reload-plugins` or start a new session. Sessions already open keep the version they started with.
+
+Any earlier sgs-kit version updates this way: the marketplace and plugin names have not changed since it was published. A plugin loaded by hand with `--plugin-dir` or `CLAUDE_CODE_PLUGIN_DIRS` updates with `git pull` instead (see below).
+
 If you already have the upstream plugins from `claude-kit`, keep one copy of each enabled: both register the same tools.
 
 ```
