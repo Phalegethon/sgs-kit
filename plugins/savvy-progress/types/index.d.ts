@@ -9,12 +9,54 @@ export type PlannedTask = {
   effort?: string
 }
 
+/** Token counts by kind, summed over model requests. */
+export type TokenSplit = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 /** The main loop's own model requests: an API-equivalent estimate, never a bill. */
 export type MainUsage = {
   model: string
   tokens: number
   costUsd: number
   steps: number
+  split?: TokenSplit
+  /** Estimated cost and tokens of the main loop per model display name. */
+  byModel?: Record<string, { costUsd: number; tokens: number }>
+  /** Wall-clock time of finished main-loop turns. */
+  activeMs?: number
+  turns?: number
+  /** Set while a main-loop turn runs. */
+  turnStartedAt?: number
+}
+
+export type RateWindow = {
+  kind: string
+  percentUsed: number
+  resetsAt?: string
+}
+
+export type ContextSlice = {
+  name: string
+  tokens: number
+  kind: string
+}
+
+/** The engine's own session figures (`$.session.usage()` and `session.measure`). */
+export type Meter = {
+  startedAt: number
+  contextTokens?: number
+  contextWindow: number
+  contextPercent?: number
+  rateLimits: RateWindow[]
+  /** The engine's ledger, as /cost totals it; absent where the host keeps none. */
+  costUsd?: number
+  categories?: ContextSlice[]
+  categoriesMax?: number
+  breakdownAt?: number
 }
 
 export type Flow = {
@@ -45,6 +87,7 @@ export type AgentRun = {
   costUsd: number
   steps: number
   round: number
+  split?: TokenSplit
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number
@@ -65,6 +108,7 @@ declare module 'claude-code' {
       panel: Panel
       now: number
       main: MainUsage
+      meter: Meter
     }
   }
 }

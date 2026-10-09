@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Flow, MainUsage, Panel, Phase, PlannedTask } from '../types'
+import type { AgentRun, Flow, MainUsage, Meter, Panel, Phase, PlannedTask, RateWindow, TokenSplit } from '../types'
 
 const flow = atom({ plugin: 'savvy-progress', key: 'flow' } as const, null)
 const agents = atom({ plugin: 'savvy-progress', key: 'agents' } as const, [])
@@ -17,6 +17,11 @@ const main = atom({ plugin: 'savvy-progress', key: 'main' } as const, {
   costUsd: 0,
   steps: 0,
 } as MainUsage)
+const meter = atom({ plugin: 'savvy-progress', key: 'meter' } as const, {
+  startedAt: 0,
+  contextWindow: 0,
+  rateLimits: [],
+} as Meter)
 
 const TOOL = 'mcp__savvy-progress__progress'
 const STEP_TOOL = 'mcp__savvy-progress__step'
@@ -24,6 +29,8 @@ const PANE = 'savvy-agents'
 const PHASES: readonly Phase[] = ['plan', 'design', 'delegate', 'review', 'close']
 const ACCENT = '#8f8cf4'
 const DONE = '#5fbf8f'
+const WARN = '#D9A23A'
+const ALERT = '#D0453F'
 
 type ProgressInput = {
   title?: string
@@ -42,7 +49,35 @@ type Lang = 'en' | 'ru' | 'tr'
 
 const STRINGS = {
   en: {
-    pane: 'Agents',
+    pane: 'Session',
+    details: 'Details',
+    context: 'Context',
+    sessionCost: 'Session cost',
+    estimated: 'estimated',
+    elapsed: 'Elapsed',
+    active: 'Active',
+    limits: 'Usage limits',
+    fiveHour: '5-hour window',
+    fiveShort: '5h',
+    sevenDay: '7-day window',
+    sevenShort: '7d',
+    spend: 'Spend limit',
+    spendShort: 'limit',
+    ctxWindow: 'Context window',
+    noReading: 'No reading yet',
+    tokenSplit: 'Tokens',
+    input: 'Input',
+    output: 'Output',
+    cacheRead: 'Cache read',
+    cacheWrite: 'Cache write',
+    cacheHit: 'Cache hit',
+    requests: 'model requests',
+    byModel: 'By model',
+    emptyHint: 'A subagent shows up here with its model, context and cost once it starts.',
+    d: 'd',
+    h: 'h',
+    min: 'min',
+    lessMin: '<1 min',
     cost: 'Cost',
     tokens: 'Tokens',
     time: 'Time',
@@ -73,7 +108,35 @@ const STRINGS = {
     estimate: '≈ API-equivalent estimate from token counts; not a bill',
   },
   ru: {
-    pane: 'Агенты',
+    pane: 'Сессия',
+    details: 'Подробнее',
+    context: 'Контекст',
+    sessionCost: 'Стоимость сессии',
+    estimated: 'оценка',
+    elapsed: 'Прошло',
+    active: 'Активно',
+    limits: 'Лимиты',
+    fiveHour: '5-часовое окно',
+    fiveShort: '5ч',
+    sevenDay: '7-дневное окно',
+    sevenShort: '7д',
+    spend: 'Лимит расходов',
+    spendShort: 'лимит',
+    ctxWindow: 'Контекстное окно',
+    noReading: 'Пока нет данных',
+    tokenSplit: 'Токены',
+    input: 'Ввод',
+    output: 'Вывод',
+    cacheRead: 'Чтение кэша',
+    cacheWrite: 'Запись кэша',
+    cacheHit: 'Попадание в кэш',
+    requests: 'запросов к модели',
+    byModel: 'По моделям',
+    emptyHint: 'Субагент появится здесь с моделью, контекстом и стоимостью, как только начнёт работу.',
+    d: 'д',
+    h: 'ч',
+    min: 'мин',
+    lessMin: '<1 мин',
     cost: 'Стоимость',
     tokens: 'Токены',
     time: 'Время',
@@ -104,7 +167,35 @@ const STRINGS = {
     estimate: '≈ оценка по ценам API из числа токенов; не счёт',
   },
   tr: {
-    pane: 'Ajanlar',
+    pane: 'Oturum',
+    details: 'Ayrıntılar',
+    context: 'Bağlam',
+    sessionCost: 'Oturum maliyeti',
+    estimated: 'tahmini',
+    elapsed: 'Süre',
+    active: 'Aktif',
+    limits: 'Kullanım limitleri',
+    fiveHour: '5 saatlik pencere',
+    fiveShort: '5 sa',
+    sevenDay: '7 günlük pencere',
+    sevenShort: '7 gün',
+    spend: 'Harcama limiti',
+    spendShort: 'limit',
+    ctxWindow: 'Bağlam penceresi',
+    noReading: 'Henüz ölçüm yok',
+    tokenSplit: 'Token dağılımı',
+    input: 'Girdi',
+    output: 'Çıktı',
+    cacheRead: 'Önbellek okuma',
+    cacheWrite: 'Önbellek yazma',
+    cacheHit: 'Önbellek isabeti',
+    requests: 'model isteği',
+    byModel: 'Modellere göre',
+    emptyHint: 'Bir alt ajan başladığında modeli, bağlamı ve maliyetiyle burada görünür.',
+    d: 'gün',
+    h: 'sa',
+    min: 'dk',
+    lessMin: '<1 dk',
     cost: 'Maliyet',
     tokens: 'Token',
     time: 'Süre',
@@ -282,7 +373,7 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
   const text = label(f)
   const pillW = Math.round(18 + text.length * 6.6)
   const pillX = Math.max(0, Math.min(BAR_W - pillW, fillW - pillW))
-  const percent = `${Math.round(ratio(f) * 100)}%`
+  const percent = fmtPct(ratio(f) * 100)
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <style>
@@ -411,6 +502,73 @@ const fmtTime = (ms: number): string => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
 
+const fmtPct = (n: number): string => (lang === 'tr' ? `%${Math.round(n)}` : `${Math.round(n)}%`)
+
+// A share that is neither none nor all never rounds to 0 or 100.
+const fmtShare = (n: number): string =>
+  n > 0 && n < 1 ? (lang === 'tr' ? '<%1' : '<1%') : n < 100 && n > 99 ? (lang === 'tr' ? '>%99' : '>99%') : fmtPct(n)
+
+// A coarse span for the band and reset times: "2 d 21 h", "1 h 12 min", "12 min", "<1 min".
+const fmtSpan = (ms: number): string => {
+  const s = tr()
+  const min = Math.floor(Math.max(0, ms) / 60000)
+  if (min < 1) return s.lessMin
+  const h = Math.floor(min / 60)
+  if (h >= 24) return `${Math.floor(h / 24)} ${s.d} ${h % 24} ${s.h}`
+  return h ? `${h} ${s.h} ${min % 60} ${s.min}` : `${min} ${s.min}`
+}
+
+const resetsIn = (span: string): string =>
+  lang === 'tr' ? `${span} sonra sıfırlanır` : lang === 'ru' ? `сброс через ${span}` : `resets in ${span}`
+
+// Gauges turn amber, then red, as a window fills; the figure is always printed beside them.
+const levelColor = (pct: number): string => (pct >= 90 ? ALERT : pct >= 70 ? WARN : ACCENT)
+
+const rateLabel = (kind: string, isShort: boolean): string => {
+  const s = tr()
+  if (kind === 'five_hour') return isShort ? s.fiveShort : s.fiveHour
+  if (kind === 'seven_day') return isShort ? s.sevenShort : s.sevenDay
+  if (kind === 'spend_limit') return isShort ? s.spendShort : s.spend
+  return kind.replace(/_/g, ' ')
+}
+
+// /context's category names, in the panel's language where it is not English.
+const CATEGORY_TR: Record<string, string> = {
+  'system prompt': 'Sistem istemi',
+  'system tools': 'Sistem araçları',
+  'mcp tools': 'MCP araçları',
+  'custom agents': 'Özel ajanlar',
+  'memory files': 'Bellek dosyaları',
+  skills: 'Beceriler',
+  'slash commands': 'Komutlar',
+  messages: 'Mesajlar',
+  'free space': 'Boş alan',
+  'autocompact buffer': 'Otomatik sıkıştırma payı',
+}
+
+const categoryName = (name: string): string => (lang === 'tr' ? (CATEGORY_TR[name.trim().toLowerCase()] ?? name) : name)
+
+const ZERO: TokenSplit = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+
+const splitOf = (u: Usage): TokenSplit => ({
+  input: u.input_tokens || 0,
+  output: u.output_tokens || 0,
+  cacheRead: u.cache_read_input_tokens || 0,
+  cacheWrite: u.cache_creation_input_tokens || 0,
+})
+
+const addSplit = (a: TokenSplit | undefined, b: TokenSplit | undefined): TokenSplit => ({
+  input: (a?.input ?? 0) + (b?.input ?? 0),
+  output: (a?.output ?? 0) + (b?.output ?? 0),
+  cacheRead: (a?.cacheRead ?? 0) + (b?.cacheRead ?? 0),
+  cacheWrite: (a?.cacheWrite ?? 0) + (b?.cacheWrite ?? 0),
+})
+
+const sumSplit = (t: TokenSplit): number => t.input + t.output + t.cacheRead + t.cacheWrite
+
+const rateWindows = (list: readonly { kind: string; percentUsed: number; resetsAt?: string }[]): RateWindow[] =>
+  list.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, ...(r.resetsAt ? { resetsAt: r.resetsAt } : {}) }))
+
 const elapsed = (a: AgentRun, at: number): number => (a.endedAt ?? Math.max(at, a.startedAt)) - a.startedAt
 
 type Planned = PlannedTask & { n: number }
@@ -421,15 +579,36 @@ const plannedOf = (f: Flow | null, list: AgentRun[]): Planned[] => {
   return (f.tasks ?? []).map((t, i) => ({ ...t, n: i + 1 })).filter(t => !started.has(norm(t.title)))
 }
 
-// Subagents and the main loop, both priced from their token counts.
-const totals = (list: AgentRun[], at: number, m?: MainUsage) => {
+// Subagents and the main loop, both priced from their token counts; the headline
+// cost is the engine's own ledger (/cost) when the host keeps one.
+const totals = (list: AgentRun[], at: number, m?: MainUsage, mt?: Meter) => {
   const agentsCost = list.reduce((s, a) => s + a.costUsd, 0)
   const mainCost = m?.costUsd ?? 0
   const tokens = list.reduce((s, a) => s + a.tokens, 0) + (m?.tokens ?? 0)
   const start = Math.min(...list.map(a => a.startedAt))
   const end = Math.max(...list.map(a => a.endedAt ?? Math.max(at, a.startedAt)))
-  return { cost: agentsCost + mainCost, agentsCost, mainCost, tokens, time: list.length ? end - start : 0 }
+  const split = list.reduce((s, a) => addSplit(s, a.split), addSplit(ZERO, m?.split))
+  const isLedger = mt?.costUsd !== undefined && mt.costUsd > 0
+  const estimate = agentsCost + mainCost
+  // Splits are priced from token counts; with a ledger they are scaled to it, so
+  // the parts always add up to the headline.
+  const k = isLedger && estimate > 0 ? (mt?.costUsd ?? 0) / estimate : 1
+  return {
+    cost: isLedger ? (mt?.costUsd ?? 0) : estimate,
+    isLedger,
+    k,
+    agentsCost: agentsCost * k,
+    mainCost: mainCost * k,
+    tokens,
+    split,
+    steps: (m?.steps ?? 0) + list.reduce((s, a) => s + a.steps, 0),
+    time: list.length ? end - start : 0,
+    sessionMs: mt?.startedAt ? Math.max(0, at - mt.startedAt) : 0,
+    activeMs: (m?.activeMs ?? 0) + (m?.turnStartedAt ? Math.max(0, at - m.turnStartedAt) : 0),
+  }
 }
+
+type Totals = ReturnType<typeof totals>
 
 // --- desktop drawings: each row is one SVG, as the band above the prompt is.
 
@@ -571,26 +750,312 @@ const statusMark = (x: number, y: number, status: string, color: string): string
 const svg = (W: number, H: number, body: string): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${PANE_CSS}${CRAB_CSS}${body}</svg>`
 
-// The pane's own title already says "Agents": the header names the flow, if any.
-const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): string => {
-  const s = tr()
-  const gap = 6
-  const tw = (W - gap * 3) / 4
-  const top = title ? 28 : 0
-  const tile = (i: number, k: string, v: string) =>
-    `<rect class="tile" x="${i * (tw + gap)}" y="${top}" width="${tw}" height="40" rx="8"/>
-<text class="s" x="${i * (tw + gap) + 9}" y="${top + 16}" font-family="${FONT}" font-size="11">${k}</text>
-<text class="t" x="${i * (tw + gap) + 9}" y="${top + 33}" font-family="${FONT}" font-size="15" font-weight="600" font-variant-numeric="tabular-nums">${v}</text>`
-  return svg(
+type TextOpts = {
+  size?: number
+  weight?: number
+  cls?: string
+  anchor?: 'middle' | 'end'
+  fill?: string
+  num?: boolean
+}
+
+const txt = (x: number, y: number, s: string, o: TextOpts = {}): string =>
+  `<text${o.fill ? ` fill="${o.fill}"` : ` class="${o.cls ?? 't'}"`} x="${x}" y="${y}"${o.anchor ? ` text-anchor="${o.anchor}"` : ''} font-family="${FONT}" font-size="${o.size ?? 12}"${o.weight ? ` font-weight="${o.weight}"` : ''}${o.num ? ' font-variant-numeric="tabular-nums"' : ''}>${xml(s)}</text>`
+
+// A rounded track with a fill from the left; `pct` is 0 to 100.
+const meterBar = (x: number, y: number, w: number, h: number, pct: number, color: string): string => {
+  const fill = Math.round((w * Math.max(0, Math.min(100, pct))) / 100)
+  return `<rect class="k" x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}"/>${fill > 0 ? `<rect x="${x}" y="${y}" width="${Math.max(h, fill)}" height="${h}" rx="${h / 2}" fill="${color}"/>` : ''}`
+}
+
+// Segments laid end to end inside one rounded track, a hairline between them.
+const stackBar = (x: number, y: number, w: number, h: number, parts: { w: number; color: string }[]): string => {
+  let cx = x
+  const segs = parts
+    .filter(p => p.w >= 1)
+    .map(p => {
+      const r = `<rect x="${cx}" y="${y}" width="${Math.max(1, p.w - 1)}" height="${h}" fill="${p.color}"/>`
+      cx += p.w
+      return r
+    })
+  return `<defs><clipPath id="sb"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}"/></clipPath></defs>
+<rect class="k" x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}"/><g clip-path="url(#sb)">${segs.join('')}</g>`
+}
+
+const PAD = 14
+
+const card = (W: number, H: number, title: string, right: string, body: string): string =>
+  svg(
     W,
-    headerHeight(title),
-    `${title ? `<text class="t" x="0" y="15" font-family="${FONT}" font-size="14" font-weight="600">${xml(fitText(title, 14, W))}</text>` : ''}
-${tile(0, s.mainSession, '≈' + fmtCost(t.mainCost))}${tile(1, s.subagents, '≈' + fmtCost(t.agentsCost))}${tile(2, s.tokens, fmtTokens(t.tokens))}${tile(3, s.time, fmtTime(t.time))}
-<text class="m" x="0" y="${top + 56}" font-family="${FONT}" font-size="10.5">${xml(fitText(`${s.cost} ≈${fmtCost(t.cost)} · ${s.estimate}`, 10.5, W))}</text>`,
+    H,
+    `<rect class="tile" width="${W}" height="${H}" rx="10"/>
+${txt(PAD, 22, fitText(title, 11.5, right ? W * 0.55 : W - PAD * 2), { size: 11.5, weight: 600, cls: 's' })}
+${right ? txt(W - PAD, 22, fitText(right, 11.5, W * 0.4), { size: 11.5, cls: 's', anchor: 'end', num: true }) : ''}
+${body}`,
+  )
+
+const swatch = (x: number, y: number, color: string): string =>
+  `<rect x="${x}" y="${y - 8}" width="8" height="8" rx="2" fill="${color}"/>`
+
+// Two-column legend rows: swatch, name, and a value right-aligned in its column.
+const legend = (W: number, top: number, rows: { name: string; value: string; color: string }[], rowH = 20): string => {
+  const colW = (W - PAD * 2 - 16) / 2
+  return rows
+    .map((r, i) => {
+      const x = PAD + (i % 2) * (colW + 16)
+      const y = top + Math.floor(i / 2) * rowH
+      const vw = textWidth(r.value, 11.5)
+      return `${swatch(x, y, r.color)}${txt(x + 13, y, fitText(r.name, 11.5, colW - vw - 22), { size: 11.5, cls: 's' })}${txt(x + colW, y, r.value, { size: 11.5, anchor: 'end', num: true })}`
+    })
+    .join('')
+}
+
+// Cost first: the engine's ledger when there is one, else the estimate; the split
+// bar is always the estimate, labelled so.
+const HERO_H = 118
+
+const heroSvg = (W: number, t: Totals): string => {
+  const s = tr()
+  const inner = W - PAD * 2
+  const sum = t.mainCost + t.agentsCost
+  const mainW = sum ? Math.round((inner * t.mainCost) / sum) : 0
+  const cost = (t.isLedger ? '' : '≈') + fmtCost(t.cost)
+  const stat = (x: number, label: string, value: string) =>
+    `${txt(x, 40, label, { size: 11, cls: 'm', anchor: 'end' })}${txt(x, 59, value, { size: 15, weight: 600, anchor: 'end', num: true })}`
+  const hasActive = W >= 340
+  const mainLegend = `${s.mainSession} ≈${fmtCost(t.mainCost)}`
+  const agentsX = PAD + 13 + textWidth(mainLegend, 11.5) + 18
+  return card(
+    W,
+    HERO_H,
+    s.sessionCost,
+    t.isLedger ? '/cost' : s.estimated,
+    `${txt(PAD, 60, cost, { size: 28, weight: 650, num: true })}
+${stat(W - PAD, hasActive ? s.active : s.elapsed, fmtTime(hasActive ? t.activeMs : t.sessionMs))}
+${hasActive ? stat(W - PAD - 86, s.elapsed, fmtTime(t.sessionMs)) : ''}
+${sum ? stackBar(PAD, 74, inner, 8, [{ w: mainW, color: ACCENT }, { w: inner - mainW, color: CLAY }]) : meterBar(PAD, 74, inner, 8, 0, ACCENT)}
+${swatch(PAD, 104, ACCENT)}${txt(PAD + 13, 104, mainLegend, { size: 11.5, cls: 's', num: true })}
+${swatch(agentsX, 104, CLAY)}${txt(agentsX + 13, 104, `${s.subagents} ≈${fmtCost(t.agentsCost)}`, { size: 11.5, cls: 's', num: true })}`,
   )
 }
 
-const headerHeight = (title: string): number => (title ? 90 : 62)
+const limitsHeight = (n: number): number => 34 + n * 46
+
+const limitsSvg = (W: number, rl: RateWindow[], at: number): string =>
+  card(
+    W,
+    limitsHeight(rl.length),
+    tr().limits,
+    '',
+    rl
+      .map((r, i) => {
+        const y0 = 34 + i * 46
+        const pct = r.percentUsed
+        const color = levelColor(pct)
+        const left = r.resetsAt ? Date.parse(r.resetsAt) - at : NaN
+        return `${txt(PAD, y0 + 10, rateLabel(r.kind, false), { size: 12.5, weight: 500 })}
+${txt(W - PAD, y0 + 10, fmtPct(pct), { size: 12.5, weight: 600, anchor: 'end', num: true, ...(pct >= 70 ? { fill: color } : {}) })}
+${meterBar(PAD, y0 + 17, W - PAD * 2, 6, pct, color)}
+${Number.isFinite(left) && left > 0 ? txt(PAD, y0 + 37, resetsIn(fmtSpan(left)), { size: 11, cls: 'm' }) : ''}`
+      })
+      .join(''),
+  )
+
+const PALETTE = ['#8f8cf4', '#378ADD', '#1D9E75', '#BA7517', '#D97757', '#7F77DD', '#D85A30', '#888780']
+
+const contextSlices = (mt: Meter) => (mt.categories ?? []).filter(c => c.kind === 'used' && c.tokens > 0).slice(0, 8)
+
+const contextHeight = (mt: Meter): number => {
+  if (mt.contextTokens === undefined) return 70
+  const rows = Math.ceil(contextSlices(mt).length / 2)
+  return rows ? 58 + rows * 20 : 54
+}
+
+const contextSvg = (W: number, mt: Meter): string => {
+  const s = tr()
+  const inner = W - PAD * 2
+  if (mt.contextTokens === undefined) {
+    return card(W, contextHeight(mt), s.ctxWindow, '', `${meterBar(PAD, 32, inner, 10, 0, ACCENT)}${txt(PAD, 60, s.noReading, { size: 11.5, cls: 'm' })}`)
+  }
+  const pct = mt.contextPercent ?? (mt.contextWindow ? (mt.contextTokens / mt.contextWindow) * 100 : 0)
+  const right = `${fmtPct(pct)} · ${fmtTokens(mt.contextTokens)} / ${fmtTokens(mt.contextWindow)}`
+  const slices = contextSlices(mt)
+  const used = slices.reduce((a, c) => a + c.tokens, 0)
+  // The categories are estimates against the compaction window: scale them to the measured fill.
+  const bar = slices.length
+    ? stackBar(
+        PAD,
+        32,
+        inner,
+        10,
+        slices.map((c, i) => ({ w: Math.round((inner * (pct / 100) * c.tokens) / used), color: PALETTE[i % PALETTE.length] ?? ACCENT })),
+      )
+    : meterBar(PAD, 32, inner, 10, pct, levelColor(pct))
+  const rows = slices.map((c, i) => ({ name: categoryName(c.name), value: fmtTokens(c.tokens), color: PALETTE[i % PALETTE.length] ?? ACCENT }))
+  return card(W, contextHeight(mt), s.ctxWindow, right, `${bar}${legend(W, 66, rows)}`)
+}
+
+const TOKEN_COLORS = { input: '#378ADD', output: ACCENT, cacheRead: '#1D9E75', cacheWrite: '#BA7517' }
+
+const tokensHeight = (t: Totals): number => (sumSplit(t.split) ? 120 : 70)
+
+const tokensSvg = (W: number, t: Totals): string => {
+  const s = tr()
+  const inner = W - PAD * 2
+  const total = sumSplit(t.split)
+  if (!total) return card(W, tokensHeight(t), s.tokenSplit, '', `${meterBar(PAD, 32, inner, 10, 0, ACCENT)}${txt(PAD, 60, s.noReading, { size: 11.5, cls: 'm' })}`)
+  const kinds = [
+    { name: s.input, v: t.split.input, color: TOKEN_COLORS.input },
+    { name: s.output, v: t.split.output, color: TOKEN_COLORS.output },
+    { name: s.cacheRead, v: t.split.cacheRead, color: TOKEN_COLORS.cacheRead },
+    { name: s.cacheWrite, v: t.split.cacheWrite, color: TOKEN_COLORS.cacheWrite },
+  ]
+  const prompt = t.split.input + t.split.cacheRead + t.split.cacheWrite
+  const hit = prompt ? (t.split.cacheRead / prompt) * 100 : 0
+  return card(
+    W,
+    tokensHeight(t),
+    s.tokenSplit,
+    fmtTokens(total),
+    `${stackBar(PAD, 32, inner, 10, kinds.map(k => ({ w: Math.round((inner * k.v) / total), color: k.color })))}
+${legend(W, 66, kinds.map(k => ({ name: k.name, value: `${fmtTokens(k.v)} · ${fmtShare((k.v / total) * 100)}`, color: k.color })))}
+${txt(PAD, 108, fitText(`${s.cacheHit} ${fmtShare(hit)} · ${t.steps} ${s.requests}`, 11, inner), { size: 11, cls: 'm', num: true })}`,
+  )
+}
+
+type ModelRow = { name: string; costUsd: number; tokens: number }
+
+const modelRows = (m: MainUsage, list: AgentRun[], k: number): ModelRow[] => {
+  const rows = new Map<string, ModelRow>()
+  const add = (name: string, costUsd: number, tokens: number) => {
+    if (!name || (!costUsd && !tokens)) return
+    const r = rows.get(name) ?? { name, costUsd: 0, tokens: 0 }
+    rows.set(name, { name, costUsd: r.costUsd + costUsd * k, tokens: r.tokens + tokens })
+  }
+  for (const [name, v] of Object.entries(m.byModel ?? {})) add(name, v.costUsd, v.tokens)
+  for (const a of list) add(modelName(a.model), a.costUsd, a.tokens)
+  return [...rows.values()].sort((a, b) => b.costUsd - a.costUsd).slice(0, 6)
+}
+
+const modelsHeight = (n: number): number => 36 + n * 24
+
+const modelsSvg = (W: number, rows: ModelRow[]): string => {
+  const top = Math.max(...rows.map(r => r.costUsd), 0.000001)
+  const nameW = 96
+  const valueW = 108
+  const barW = Math.max(30, W - PAD * 2 - nameW - valueW)
+  return card(
+    W,
+    modelsHeight(rows.length),
+    tr().byModel,
+    '',
+    rows
+      .map((r, i) => {
+        const y = 44 + i * 24
+        return `${txt(PAD, y, fitText(r.name, 12, nameW - 8), { size: 12, weight: 500 })}
+${meterBar(PAD + nameW, y - 7, barW, 6, (r.costUsd / top) * 100, PALETTE[i % PALETTE.length] ?? ACCENT)}
+${txt(W - PAD, y, `≈${fmtCost(r.costUsd)} · ${fmtTokens(r.tokens)}`, { size: 11.5, cls: 's', anchor: 'end', num: true })}`
+      })
+      .join(''),
+  )
+}
+
+const emptySvg = (W: number): string => {
+  const s = tr()
+  return svg(
+    W,
+    54,
+    `${crab(2, 10, 'other', true)}
+${txt(44, 24, s.empty, { size: 12.5, weight: 500, cls: 's' })}
+${txt(44, 41, fitText(s.emptyHint, 11, W - 46), { size: 11, cls: 'm' })}`,
+  )
+}
+
+// --- the band's session row: one SVG of labelled figures, dropped by priority as it narrows.
+
+type Seg = { prio: number; w: number; draw: (x: number) => string }
+
+const BAND_Y = 15.5
+
+const figure = (label: string, value: string, prio: number, color?: string): Seg => {
+  const lw = label ? textWidth(label, 11.5) + 5 : 0
+  return {
+    prio,
+    w: lw + textWidth(value, 12.5),
+    draw: x =>
+      (label ? txt(x, BAND_Y, label, { size: 11.5, cls: 'm' }) : '') +
+      txt(x + lw, BAND_Y, value, { size: 12.5, weight: 600, num: true, ...(color ? { fill: color } : {}) }),
+  }
+}
+
+const gauge = (label: string, pct: number, prio: number): Seg => {
+  const lw = textWidth(label, 11.5) + 6
+  const bw = 30
+  const v = fmtPct(pct)
+  const color = levelColor(pct)
+  return {
+    prio,
+    w: lw + bw + 6 + textWidth(v, 12.5),
+    draw: x =>
+      txt(x, BAND_Y, label, { size: 11.5, cls: 'm' }) +
+      meterBar(x + lw, 8, bw, 6, pct, color) +
+      txt(x + lw + bw + 6, BAND_Y, v, { size: 12.5, weight: 600, num: true, ...(pct >= 70 ? { fill: color } : {}) }),
+  }
+}
+
+const RATE_PRIO: Record<string, number> = { five_hour: 3, spend_limit: 3, seven_day: 6 }
+
+const bandSegs = (t: Totals, m: MainUsage, mt: Meter): Seg[] => {
+  const s = tr()
+  const segs: Seg[] = []
+  if (m.model) segs.push(figure('', modelName(m.model), 7))
+  segs.push(figure(s.cost, (t.isLedger ? '' : '≈') + fmtCost(t.cost), 1))
+  segs.push(figure(s.tokens, fmtTokens(t.tokens), 4))
+  if (mt.contextTokens !== undefined && mt.contextPercent !== undefined) segs.push(gauge(s.context, mt.contextPercent, 2))
+  for (const r of mt.rateLimits) segs.push(gauge(rateLabel(r.kind, true), r.percentUsed, RATE_PRIO[r.kind] ?? 8))
+  if (t.sessionMs) segs.push(figure(s.elapsed, fmtSpan(t.sessionMs), 5))
+  return segs
+}
+
+const bandText = (t: Totals, m: MainUsage, mt: Meter): string => {
+  const s = tr()
+  const parts: string[] = []
+  if (m.model) parts.push(modelName(m.model))
+  parts.push(`${s.cost} ${t.isLedger ? '' : '≈'}${fmtCost(t.cost)}`)
+  if (mt.contextPercent !== undefined) parts.push(`${s.context} ${fmtPct(mt.contextPercent)}`)
+  for (const r of mt.rateLimits) parts.push(`${rateLabel(r.kind, true)} ${fmtPct(r.percentUsed)}`)
+  parts.push(`${s.tokens} ${fmtTokens(t.tokens)}`)
+  if (t.sessionMs) parts.push(`${s.elapsed} ${fmtSpan(t.sessionMs)}`)
+  return parts.join(' · ')
+}
+
+const BAND_GAP = 19
+
+// Returns the drawing and its width: the figures that fit, so the button sits right after them.
+const statsSvg = (W: number, segs: Seg[], isWorking: boolean): { source: string; width: number } => {
+  // Keep the most important figures that fit, then draw them in their own order.
+  let used = 16
+  const kept = new Set<Seg>()
+  for (const seg of [...segs].sort((a, b) => a.prio - b.prio)) {
+    const w = seg.w + (kept.size ? BAND_GAP : 0)
+    if (used + w > W) continue
+    kept.add(seg)
+    used += w
+  }
+  let x = 16
+  const body = segs
+    .filter(seg => kept.has(seg))
+    .map((seg, i) => {
+      const sep = i ? `<rect class="k" x="${x + Math.floor(BAND_GAP / 2) - 0.5}" y="5" width="1" height="12"/>` : ''
+      if (i) x += BAND_GAP
+      const out = sep + seg.draw(x)
+      x += seg.w
+      return out
+    })
+    .join('')
+  const width = Math.ceil(x + 4)
+  return { source: svg(width, H, `<circle${isWorking ? ' class="live"' : ''} cx="5" cy="${H / 2}" r="4" fill="${isWorking ? ACCENT : DONE}"/>${body}`), width }
+}
 
 // The task's own progress when the worker reports steps; a finished run is full.
 const progressOf = (a: AgentRun): number | null => {
@@ -601,7 +1066,7 @@ const progressOf = (a: AgentRun): number | null => {
 
 const ctxOf = (a: AgentRun): number => (a.contextMax ? Math.min(100, Math.round((a.contextTokens / a.contextMax) * 100)) : 0)
 
-const agentSvg = (W: number, a: AgentRun, at: number): string => {
+const agentSvg = (W: number, a: AgentRun, at: number, k = 1): string => {
   const s = tr()
   const tier = tierOf(a.type)
   const color = colorOf(tier)
@@ -612,7 +1077,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   if (a.status === 'failed') meta.push(s.failed)
   const barW = textW
   const progress = progressOf(a)
-  const stats = `ctx ${ctx}% · ${fmtTokens(a.contextTokens)}  ≈${fmtCost(a.costUsd)}  ${fmtTime(elapsed(a, at))}`
+  const stats = `ctx ${fmtPct(ctx)} · ${fmtTokens(a.contextTokens)}  ≈${fmtCost(a.costUsd * k)}  ${fmtTime(elapsed(a, at))}`
   const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' · ' + a.stepNote : ''}` : ''
   const stepsW = Math.max(0, barW - textWidth(stats, 11) - 12)
   // Without reported steps the bar falls back to the context, drawn grey.
@@ -648,7 +1113,7 @@ ${statusMark(W - 8, 16, 'planned', color)}
   )
 }
 
-const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: ReturnType<typeof totals>): string => {
+const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: Totals): string => {
   const icons = [
     ...list.filter(a => a.status === 'running').map(a => ({ k: costumeOf(a.type), c: colorOf(tierOf(a.type)), s: 'running', dim: false })),
     ...list.filter(a => a.status !== 'running').map(a => ({ k: costumeOf(a.type), c: colorOf(tierOf(a.type)), s: a.status, dim: false })),
@@ -688,7 +1153,52 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   const at = await $.clock.now()
   await update($, now, () => at)
   await $.ui.open({ id: PANE, title: tr().pane })
+  void refreshBreakdown($)
   return true
+}
+
+const isPaneOpen = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    return (await $.ui.panes()).some(p => p.id === PANE)
+  } catch {
+    return false
+  }
+}
+
+// The engine's figures as `$.session.usage()` and `session.measure` report them.
+const meterFrom = (u: {
+  context: { tokens?: number; window: number; percent?: number }
+  rateLimits: readonly { kind: string; percentUsed: number; resetsAt?: string }[]
+  cost?: { usd: number }
+}): Partial<Meter> => ({
+  contextTokens: u.context.tokens,
+  contextWindow: u.context.window,
+  contextPercent: u.context.percent,
+  rateLimits: rateWindows(u.rateLimits),
+  ...(u.cost ? { costUsd: u.cost.usd } : {}),
+})
+
+// /context's categories, estimated locally (`summary` sends no request); for the pane only.
+async function refreshBreakdown($: EngineInterface): Promise<void> {
+  try {
+    const at = await $.clock.now()
+    await update($, meter, m => ({ ...m, breakdownAt: at }))
+    const u = await $.session.usage({ breakdown: 'summary' })
+    const b = u.context.breakdown
+    await update($, meter, m => ({
+      ...m,
+      ...meterFrom(u),
+      startedAt: u.startedAt,
+      ...(b
+        ? {
+            categories: b.categories.filter(c => !c.isDeferred).map(c => ({ name: c.name, tokens: c.tokens, kind: c.kind })),
+            categoriesMax: b.rawMaxTokens,
+          }
+        : {}),
+    }))
+  } catch {
+    // No session bound or no breakdown on this host: the pane draws the plain fill.
+  }
 }
 
 async function autoOpen($: EngineInterface, key: string): Promise<void> {
@@ -760,16 +1270,46 @@ export const register: Register = (on, options) => {
       description: 'Show or hide the panel of subagents: running, finished and planned, with model, context, cost and time',
     })
 
-    // Ticks the running agents' clocks; quiet when nothing runs.
+    try {
+      const u = await $.session.usage()
+      await update($, meter, m => ({ ...m, ...meterFrom(u), startedAt: u.startedAt }))
+    } catch {
+      // No session figures on this host: the band shows the plugin's own estimate.
+    }
+    const at0 = await $.clock.now()
+    await update($, now, () => at0)
+
+    // Every second while the pane is open; otherwise once a minute, which is all
+    // the band's coarse session time needs.
     $.clock.every(1000, () => {
       void (async () => {
-        const list = await read($, agents)
-        if (!list.some(a => a.status === 'running')) return
         const at = await $.clock.now()
+        const prev = await read($, now)
+        if (Math.floor(at / 60000) === Math.floor(prev / 60000) && !(await isPaneOpen($))) return
         await update($, now, () => at)
       })()
     })
     return started
+  })
+
+  // The engine's own figures: context fill, rate-limit windows, the /cost ledger.
+  on('session.measure', async ($, e, next) => {
+    const result = await next(e)
+    await update($, meter, m => ({ ...m, ...meterFrom(e) }))
+    if (e.changed.includes('context')) {
+      const at = await $.clock.now()
+      const m = await read($, meter)
+      if (at - (m.breakdownAt ?? 0) > 15000 && (await isPaneOpen($))) void refreshBreakdown($)
+    }
+    return result
+  })
+
+  // Main-loop turns only: a subagent's run raises no turn.start.
+  on('turn.start', async ($, e, next) => {
+    const at = await $.clock.now()
+    await update($, main, m => ({ ...m, turnStartedAt: at }))
+    await update($, now, () => at)
+    return next(e)
   })
 
   on('command.run', { command: 'agents-info' }, async $ => {
@@ -864,17 +1404,21 @@ export const register: Register = (on, options) => {
     if (!agentId) {
       // The main loop: priced like a subagent so a subscription session sees its API-equivalent cost.
       const model = usage.model || e.model
-      await update($, main, m => ({
-        model,
-        tokens:
-          m.tokens +
-          (usage.input_tokens || 0) +
-          (usage.output_tokens || 0) +
-          (usage.cache_read_input_tokens || 0) +
-          (usage.cache_creation_input_tokens || 0),
-        costUsd: m.costUsd + costOf(model, usage),
-        steps: m.steps + 1,
-      }))
+      const split = splitOf(usage)
+      const cost = costOf(model, usage)
+      const name = modelName(model)
+      await update($, main, m => {
+        const prev = m.byModel?.[name] ?? { costUsd: 0, tokens: 0 }
+        return {
+          ...m,
+          model,
+          tokens: m.tokens + sumSplit(split),
+          costUsd: m.costUsd + cost,
+          steps: m.steps + 1,
+          split: addSplit(m.split, split),
+          byModel: { ...m.byModel, [name]: { costUsd: prev.costUsd + cost, tokens: prev.tokens + sumSplit(split) } },
+        }
+      })
       return result
     }
 
@@ -903,6 +1447,7 @@ export const register: Register = (on, options) => {
                 (usage.cache_creation_input_tokens || 0),
               costUsd: a.costUsd + costOf(model, usage),
               steps: a.steps + 1,
+              split: addSplit(a.split, splitOf(usage)),
             },
       ),
     )
@@ -931,11 +1476,21 @@ export const register: Register = (on, options) => {
                     e.usage.cache_read_input_tokens +
                     e.usage.cache_creation_input_tokens,
                   costUsd: costOf(e.usage.model || a.model, e.usage),
+                  split: splitOf(e.usage),
                 }
               : {}),
           }
         }),
       )
+      await update($, now, () => at)
+    } else {
+      const at = await $.clock.now()
+      await update($, main, m => ({
+        ...m,
+        activeMs: (m.activeMs ?? 0) + Math.max(0, e.durationMs || (m.turnStartedAt ? at - m.turnStartedAt : 0)),
+        turns: (m.turns ?? 0) + 1,
+        turnStartedAt: undefined,
+      }))
       await update($, now, () => at)
     }
     return next(e)
@@ -948,20 +1503,25 @@ export const register: Register = (on, options) => {
     const list = await read($, agents)
     const f = await read($, flow)
     const p: Panel = await read($, panel)
+    const m = await read($, main)
+    const mt = await read($, meter)
     const at = Math.max(await read($, now), ...list.map(a => a.startedAt), 0)
 
     const running = list.filter(a => a.status === 'running').reverse()
     const finished = list.filter(a => a.status !== 'running').reverse()
     const planned = plannedOf(f, list)
-    const t = totals(list, at, await read($, main))
-    // The pane's title says "Agents"; inside, only the flow's own name.
+    const t = totals(list, at, m, mt)
+    const models = modelRows(m, list, t.k)
+    // The pane's title says "Session"; inside, only the flow's own name.
     const title = f && !f.isFinished ? f.title : ''
+    const cost = (t.isLedger ? '' : '≈') + fmtCost(t.cost)
 
     const toggleCompact = (
       <Button
         key="compact"
         label={p.isCompact ? s.expand : s.collapse}
         plain
+        dimColor
         onPress={() => update($, panel, prev => ({ ...prev, isCompact: !prev.isCompact }))}
       />
     )
@@ -970,11 +1530,21 @@ export const register: Register = (on, options) => {
         key="done"
         label={`${p.isDoneCollapsed ? '▸' : '▾'} ${s.finished} · ${finished.length}`}
         plain
+        dimColor
         onPress={() => update($, panel, prev => ({ ...prev, isDoneCollapsed: !prev.isDoneCollapsed }))}
       />
     )
     const isEmpty = list.length === 0 && planned.length === 0
-    const summary = `≈${fmtCost(t.cost)}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
+    const summary = `${cost}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.sessionMs)}`
+    const agentsHeader = (
+      <Box key="agents-h" flexDirection="row" justifyContent="space-between" alignItems="center">
+        <Text bold>
+          {s.subagents}
+          {list.length ? ` · ${list.length}` : ''}
+        </Text>
+        {isEmpty ? null : toggleCompact}
+      </Box>
+    )
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
@@ -984,33 +1554,52 @@ export const register: Register = (on, options) => {
           {text}
         </Text>
       )
+      const pct = mt.contextPercent
+      const ctxAlt = pct === undefined ? s.noReading : `${fmtPct(pct)}, ${fmtTokens(mt.contextTokens ?? 0)} / ${fmtTokens(mt.contextWindow)}`
+      const limitsAlt = mt.rateLimits.map(r => `${rateLabel(r.kind, false)} ${fmtPct(r.percentUsed)}`).join(', ')
 
-      if (p.isCompact) {
-        return (
-          <Box flexDirection="column" gap={1}>
-            <Svg source={compactSvg(W, list, planned, t)} alt={`${list.length} ${s.agentsCount}, ${summary}`} width={W} height={32} />
-            {toggleCompact}
+      let agentsBody
+      if (isEmpty) agentsBody = <Svg key="empty" source={emptySvg(W)} alt={`${s.empty} ${s.emptyHint}`} width={W} height={54} />
+      else if (p.isCompact)
+        agentsBody = <Svg key="compact" source={compactSvg(W, list, planned, t)} alt={`${list.length} ${s.agentsCount}`} width={W} height={32} />
+      else
+        agentsBody = (
+          <Box key="rows" flexDirection="column">
+            {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
+            {running.map(a => (
+              <Svg key={a.id} source={agentSvg(W, a, at, t.k)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
+            ))}
+            {finished.length > 0 && toggleDone}
+            {!p.isDoneCollapsed &&
+              finished.map(a => (
+                <Svg key={a.id} source={agentSvg(W, a, at, t.k)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />
+              ))}
+            {planned.length > 0 && section('h-plan', `${s.planned} · ${planned.length}`)}
+            {planned.map(pl => (
+              <Svg key={`plan-${pl.n}`} source={plannedSvg(W, pl)} alt={`${pl.n}. ${pl.title}: ${s.isPlanned}`} width={W} height={46} />
+            ))}
           </Box>
         )
-      }
+
       return (
-        <Box flexDirection="column">
-          <Svg source={headerSvg(W, title, t)} alt={title ? `${title}: ${summary}` : summary} width={W} height={headerHeight(title)} />
-          {toggleCompact}
-          {isEmpty && <Text dimColor>{s.empty}</Text>}
-          {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
-          {running.map(a => (
-            <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
-          ))}
-          {finished.length > 0 && toggleDone}
-          {!p.isDoneCollapsed &&
-            finished.map(a => (
-              <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isFinished}`} width={W} height={66} />
-            ))}
-          {planned.length > 0 && section('h-plan', `${s.planned} · ${planned.length}`)}
-          {planned.map(pl => (
-            <Svg key={`plan-${pl.n}`} source={plannedSvg(W, pl)} alt={`${pl.n}. ${pl.title}: ${s.isPlanned}`} width={W} height={46} />
-          ))}
+        <Box flexDirection="column" gap={1}>
+          {title ? (
+            <Text bold wrap="truncate-end">
+              {title}
+            </Text>
+          ) : null}
+          <Svg source={heroSvg(W, t)} alt={`${s.sessionCost}: ${summary}`} width={W} height={HERO_H} />
+          {mt.rateLimits.length > 0 && (
+            <Svg source={limitsSvg(W, mt.rateLimits, at)} alt={`${s.limits}: ${limitsAlt}`} width={W} height={limitsHeight(mt.rateLimits.length)} />
+          )}
+          <Svg source={contextSvg(W, mt)} alt={`${s.ctxWindow}: ${ctxAlt}`} width={W} height={contextHeight(mt)} />
+          <Svg source={tokensSvg(W, t)} alt={`${s.tokenSplit}: ${fmtTokens(t.tokens)}`} width={W} height={tokensHeight(t)} />
+          {models.length > 1 && (
+            <Svg source={modelsSvg(W, models)} alt={`${s.byModel}: ${models.map(r => `${r.name} ≈${fmtCost(r.costUsd)}`).join(', ')}`} width={W} height={modelsHeight(models.length)} />
+          )}
+          <Text dimColor>{s.estimate}</Text>
+          {agentsHeader}
+          {agentsBody}
         </Box>
       )
     }
@@ -1044,121 +1633,183 @@ export const register: Register = (on, options) => {
             {progress === null ? <Text dimColor>{ctxBar(ctx, barW)}</Text> : <Text color={color}>{ctxBar(progress * 100, barW)}</Text>}
             <Text dimColor>
               {' '}
-              {steps}ctx {ctx}% · {fmtTokens(a.contextTokens)} ≈{fmtCost(a.costUsd)} {fmtTime(elapsed(a, at))}
+              {steps}ctx {fmtPct(ctx)} · {fmtTokens(a.contextTokens)} ≈{fmtCost(a.costUsd * t.k)} {fmtTime(elapsed(a, at))}
             </Text>
           </Text>
         </Box>
       )
     }
+    const labelW = Math.max(...mt.rateLimits.map(r => rateLabel(r.kind, true).length), s.context.length)
+    const gaugeRow = (key: string, name: string, pct: number, note: string) => (
+      <Text key={key} wrap="truncate-end">
+        {name.padEnd(labelW)} <Text color={levelColor(pct)}>{ctxBar(pct, barW)}</Text> {fmtPct(pct)}
+        <Text dimColor> {note}</Text>
+      </Text>
+    )
+    const total = sumSplit(t.split)
+    const prompt = t.split.input + t.split.cacheRead + t.split.cacheWrite
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between">
+        {title ? (
           <Text bold wrap="truncate-end">
             {title}
           </Text>
-          {toggleCompact}
-        </Box>
-        <Text dimColor>
-          {s.mainSession} ≈{fmtCost(t.mainCost)} · {s.subagents} ≈{fmtCost(t.agentsCost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+        ) : null}
+        <Text wrap="truncate-end">
+          <Text bold>{cost}</Text>
+          <Text dimColor>
+            {' '}
+            {t.isLedger ? '/cost' : s.estimated} · {s.elapsed} {fmtTime(t.sessionMs)} · {s.active} {fmtTime(t.activeMs)}
+          </Text>
         </Text>
+        <Text dimColor wrap="truncate-end">
+          {s.mainSession} ≈{fmtCost(t.mainCost)} · {s.subagents} ≈{fmtCost(t.agentsCost)} · {fmtTokens(t.tokens)} {s.tokensWord}
+        </Text>
+        <Box flexDirection="column" marginTop={1}>
+          {mt.rateLimits.map(r => {
+            const left = r.resetsAt ? Date.parse(r.resetsAt) - at : NaN
+            return gaugeRow(r.kind, rateLabel(r.kind, true), r.percentUsed, Number.isFinite(left) && left > 0 ? resetsIn(fmtSpan(left)) : '')
+          })}
+          {mt.contextPercent === undefined ? (
+            <Text dimColor>
+              {s.context}: {s.noReading}
+            </Text>
+          ) : (
+            gaugeRow('ctx', s.context, mt.contextPercent, `${fmtTokens(mt.contextTokens ?? 0)} / ${fmtTokens(mt.contextWindow)}`)
+          )}
+        </Box>
+        {total > 0 ? (
+          <Text dimColor wrap="truncate-end">
+            {s.input} {fmtTokens(t.split.input)} · {s.output} {fmtTokens(t.split.output)} · {s.cacheRead} {fmtTokens(t.split.cacheRead)} · {s.cacheWrite}{' '}
+            {fmtTokens(t.split.cacheWrite)} · {s.cacheHit} {fmtShare(prompt ? (t.split.cacheRead / prompt) * 100 : 0)}
+          </Text>
+        ) : null}
         <Text dimColor wrap="truncate-end">
           {s.estimate}
         </Text>
-        {p.isCompact ? (
-          <Text wrap="truncate-end">
-            {[...running, ...finished].map(a => (
-              <Text key={a.id} color={colorOf(tierOf(a.type))}>
-                {STATUS_GLYPH[a.status]}{' '}
-              </Text>
-            ))}
-            {planned.map(pl => (
-              <Text key={`plan-${pl.n}`} dimColor>
-                ◷{' '}
-              </Text>
-            ))}
-          </Text>
-        ) : (
-          <Box flexDirection="column" marginTop={1}>
-            {isEmpty && <Text dimColor>{s.empty}</Text>}
-            {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
-            {running.map(row)}
-            {finished.length > 0 && toggleDone}
-            {!p.isDoneCollapsed && finished.map(row)}
-            {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
-            {planned.map(pl => {
-              const tier = pl.tier in TIER_COLOR ? pl.tier : 'other'
-              return (
-                <Box key={`plan-${pl.n}`} flexDirection="column" marginBottom={1}>
-                  <Text dimColor wrap="truncate-end">
-                    <Text color={colorOf(tier)}>▢</Text> {pl.n}. {pl.title} ◷
-                  </Text>
-                  <Text dimColor wrap="truncate-end">
-                    {'  '}
-                    {tier} · {plannedModel(pl, tier)}
-                    {pl.after.length ? ` · ${s.after} ${pl.after.join(', ')}` : ''}
-                  </Text>
-                </Box>
-              )
-            })}
-          </Box>
-        )}
+        <Box flexDirection="column" marginTop={1}>
+          {agentsHeader}
+          {isEmpty ? (
+            <Text dimColor>{s.empty}</Text>
+          ) : p.isCompact ? (
+            <Text wrap="truncate-end">
+              {[...running, ...finished].map(a => (
+                <Text key={a.id} color={colorOf(tierOf(a.type))}>
+                  {STATUS_GLYPH[a.status]}{' '}
+                </Text>
+              ))}
+              {planned.map(pl => (
+                <Text key={`plan-${pl.n}`} dimColor>
+                  ◷{' '}
+                </Text>
+              ))}
+            </Text>
+          ) : (
+            <Box flexDirection="column">
+              {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
+              {running.map(row)}
+              {finished.length > 0 && toggleDone}
+              {!p.isDoneCollapsed && finished.map(row)}
+              {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
+              {planned.map(pl => {
+                const tier = pl.tier in TIER_COLOR ? pl.tier : 'other'
+                return (
+                  <Box key={`plan-${pl.n}`} flexDirection="column" marginBottom={1}>
+                    <Text dimColor wrap="truncate-end">
+                      <Text color={colorOf(tier)}>▢</Text> {pl.n}. {pl.title} ◷
+                    </Text>
+                    <Text dimColor wrap="truncate-end">
+                      {'  '}
+                      {tier} · {plannedModel(pl, tier)}
+                      {pl.after.length ? ` · ${s.after} ${pl.after.join(', ')}` : ''}
+                    </Text>
+                  </Box>
+                )
+              })}
+            </Box>
+          )}
+        </Box>
       </Box>
     )
   })
 
+  // The band: the session row in every session, and the flow's progress under it while one runs.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const f = await read($, flow)
-    if (f === null || e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey) return next(e)
 
+    const s = tr()
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
+    const f = await read($, flow)
     const list = await read($, agents)
-    const crew = list.length + plannedOf(f, list).length
-    const isWorking = list.some(a => a.status === 'running')
-    const crewButton = (
-      <Button key="savvy-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
-    )
-    const percent = `${Math.round(ratio(f) * 100)}%`
-    const dismiss = (
-      <Button
-        key="savvy-dismiss"
-        label="✕"
-        plain
-        role="dismiss"
-        onPress={() => update($, flow, () => null)}
-      />
-    )
+    const m = await read($, main)
+    const mt = await read($, meter)
+    const at = Math.max(await read($, now), 0)
+    const t = totals(list, at, m, mt)
+    const isWorking = e.props.isWorking || list.some(a => a.status === 'running')
+    const details = <Button key="savvy-details" label={s.details} plain dimColor onPress={() => void togglePane($)} />
 
-    if ('Svg' in ui) {
+    const crew = f ? list.length + plannedOf(f, list).length : 0
+    const crewButton = <Button key="savvy-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
+    const percent = f ? fmtPct(ratio(f) * 100) : ''
+    const dismiss = <Button key="savvy-dismiss" label="✕" plain role="dismiss" onPress={() => update($, flow, () => null)} />
+
+    if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
-      // About 8 CSS px per reported column; the rest is the count, the dismiss
-      // and their gaps. No floor above the slot: a row wider than it would wrap.
-      const width = Math.max(180, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 96))
+      // About 8 CSS px per reported column; the rest is the buttons and their gaps.
+      // No floor above the slot: a row wider than it would wrap.
+      const cols = e.props.bodyColumns || 100
+      const stats = statsSvg(Math.max(180, Math.min(1600, cols * 8 - 120)), bandSegs(t, m, mt), isWorking)
+      const flowW = Math.max(180, Math.min(1600, cols * 8 - 96))
       return (
-        <Box flexDirection="row" alignItems="center" gap={1}>
-          <Svg source={rowSvg(f, width, isWorking)} alt={`${f.title}: ${label(f)}, ${percent}`} width={width} height={H} />
-          {crewButton}
-          {dismiss}
+        <Box flexDirection="column">
+          <Box key="savvy-stats" flexDirection="row" alignItems="center" gap={1}>
+            <Svg source={stats.source} alt={bandText(t, m, mt)} width={stats.width} height={H} />
+            {details}
+          </Box>
+          {f && (
+            <Box key="savvy-flow" flexDirection="row" alignItems="center" gap={1}>
+              <Svg source={rowSvg(f, flowW, list.some(a => a.status === 'running'))} alt={`${f.title}: ${label(f)}, ${percent}`} width={flowW} height={H} />
+              {crewButton}
+              {dismiss}
+            </Box>
+          )}
         </Box>
       )
     }
 
     const cols = e.props.bodyColumns
+    const statsRow = (
+      <Box key="savvy-stats" flexDirection="row" gap={1}>
+        <Text color={isWorking ? ACCENT : DONE}>●</Text>
+        <Box flexGrow={1} flexShrink={1}>
+          <Text dimColor wrap="truncate-end">
+            {bandText(t, m, mt)}
+          </Text>
+        </Box>
+        {details}
+      </Box>
+    )
+    if (!f) return statsRow
+
     const titleW = Math.max(8, Math.min(30, f.title.length + 2, Math.floor(cols / 3)))
     const width = Math.max(6, Math.min(40, cols - titleW - 32))
     return (
-      <Box flexDirection="row" gap={2}>
-        <Box width={titleW} flexShrink={0}>
-          <Text color={f.isFinished ? DONE : ACCENT}>● </Text>
-          <Text wrap="truncate-end">{f.title}</Text>
+      <Box flexDirection="column">
+        {statsRow}
+        <Box key="savvy-flow" flexDirection="row" gap={2}>
+          <Box width={titleW} flexShrink={0}>
+            <Text color={f.isFinished ? DONE : ACCENT}>● </Text>
+            <Text wrap="truncate-end">{f.title}</Text>
+          </Box>
+          <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>
+          <Text bold>{label(f)}</Text>
+          <Text dimColor>{percent}</Text>
+          <Text color={CLAY}>▣</Text>
+          {crewButton}
+          {dismiss}
         </Box>
-        <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>
-        <Text bold>{label(f)}</Text>
-        <Text dimColor>{percent}</Text>
-        <Text color={CLAY}>▣</Text>
-        {crewButton}
-        {dismiss}
       </Box>
     )
   })

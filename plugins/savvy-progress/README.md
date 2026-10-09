@@ -1,8 +1,11 @@
 # savvy-progress
 
-> **Fork (sgs-kit, 1.2.0-sgs.1).** Local changes on top of upstream `johnnyvizz/claude-kit`:
-> the main session's own model requests are priced too (header: main session, subagents, tokens, time;
-> an API-equivalent estimate from token counts, not a bill — useful on a subscription),
+> **Fork (sgs-kit, 1.2.0-sgs.2).** Local changes on top of upstream `johnnyvizz/claude-kit`:
+> every session shows a **session row** above the prompt (model, cost, tokens, context fill, the 5-hour and
+> 7-day limits, session time) whose **Details** button opens the **session panel**: cost with the main
+> session/subagent split, usage limits with reset times, the context window by category, tokens by kind
+> with the cache hit rate, cost by model, then the subagents. Cost is the engine's own ledger (/cost) when the
+> host keeps one, else an API-equivalent estimate from token counts; never a bill.
 > planned tasks take an optional `model`/`effort` so a Haiku or Sonnet task is not shown as Opus,
 > while a reported flow runs any subagent opens the panel, and the panel speaks Turkish (`language: tr`).
 > Install: `claude plugin marketplace add <path to this repo>`, then `claude plugin install savvy-progress@sgs-kit`
@@ -11,8 +14,9 @@
 
 A Claude Code mod: a progress bar above the prompt and a live panel of subagents. Made for the [savvy-flow](../savvy-flow) skill, and useful with any subagents.
 
+- **Session row** (fork): always on; figures drop by priority as the band narrows, gauges turn amber at 70 % and red at 90 %, and the figure is always printed.
 - **Progress bar**: the flow's title, phase, accepted tasks out of planned, and a button with the crew size that opens the panel. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts.
-- **Agents panel** (`/agents-info` toggles it): running, finished and planned subagents with model, effort, task progress, context, estimated cost and time. Working crabs walk, and each savvy tier animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.
+- **Session panel** (`/agents-info` or the row's Details button toggles it): the session cards above, then running, finished and planned subagents with model, effort, task progress, context, estimated cost and time. Working crabs walk, and each savvy tier animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.
 
 ## Tools it adds
 

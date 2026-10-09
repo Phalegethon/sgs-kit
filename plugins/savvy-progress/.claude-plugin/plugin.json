@@ -1,7 +1,7 @@
 {
   "name": "savvy-progress",
-  "version": "1.2.0-sgs.1",
-  "description": "Progress bar above the prompt for /savvy-flow, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, cost and time. Fork: main-session API-equivalent cost, per-task model on planned rows, Turkish.",
+  "version": "1.2.0-sgs.2",
+  "description": "Progress bar above the prompt for /savvy-flow, plus an agents panel (/agents-info): running, finished and planned subagents with model, task progress, context, cost and time. Fork: a session row above the prompt in every session (cost, tokens, context, rate limits, time) and a session panel, per-task model on planned rows, Turkish.",
   "author": {
     "name": "johnnyvizz",
     "url": "https://github.com/johnnyvizz"
