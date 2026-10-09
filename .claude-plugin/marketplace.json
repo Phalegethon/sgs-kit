@@ -19,7 +19,7 @@
       "name": "savvy-progress",
       "source": "./plugins/savvy-progress",
       "description": "Mod: a session row above the prompt in every session (cost, tokens, context, usage limits, time), a session panel, and a progress bar with live agents for savvy-flow and any subagents.",
-      "version": "1.2.0-sgs.3",
+      "version": "1.2.0-sgs.4",
       "category": "mod"
     }
   ]

@@ -13,6 +13,7 @@ test('planned rows name the model and the main loop is priced', { options: { lan
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   // The panel opens itself when a plan arrives; the engine would seat it.
   on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('clock.now', async () => ({ value: 1_000_000 }))
   // Bottom of turn.step: the model answers with usage; agentId absent means the main loop.
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: usage('claude-opus-5-5', 1000, 1000) }
@@ -48,6 +49,7 @@ test('a planned task without a model keeps the tier default', async ($, on) => {
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   // The panel opens itself when a plan arrives; the engine would seat it.
   on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('clock.now', async () => ({ value: 1_000_000 }))
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await $.tool.call({
     tool: 'mcp__savvy-progress__progress',

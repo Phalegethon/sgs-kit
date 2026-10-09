@@ -270,9 +270,9 @@ const cleanTasks = (tasks: ProgressInput['tasks']): PlannedTask[] | undefined =>
       ...(t.effort?.trim() ? { effort: t.effort.trim().toLowerCase() } : {}),
     }))
 
-const merge = (prev: Flow | null, input: ProgressInput): Flow => {
+const merge = (prev: Flow | null, input: ProgressInput, at: number): Flow => {
   // A new title means a new flow: never carry counters over from an earlier one.
-  const base = isNewFlow(prev, input) || !prev ? blank() : { ...blank(), ...prev }
+  const base = isNewFlow(prev, input) || !prev ? { ...blank(), startedAt: at } : { ...blank(), ...prev }
   const tasks = cleanTasks(input.tasks) ?? base.tasks
   const total = Math.max(0, Math.round(input.total ?? (input.tasks ? tasks.length : base.total)))
   const done = Math.min(total || Infinity, Math.max(0, Math.round(input.done ?? base.done)))
@@ -336,11 +336,15 @@ const fitText = (s: string, size: number, maxW: number): string => {
   return out + '…'
 }
 
-const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
+// `crew` is drawn beside the crab, a figure and not a control: a "×N" button next
+// to the dismiss read as a second close mark.
+const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string => {
   // The title takes what it needs, up to 40% of the row; the bar takes the rest.
   const title = fitText(f.title, 13, Math.max(60, W * 0.4))
+  const crewW = crew ? Math.ceil(textWidth(String(crew), 12.5)) + 4 : 0
+  const crabX = W - crewW - CRAB_W + 1
   const BAR_X = Math.round(16 + textWidth(title, 13) + 12)
-  const BAR_W = Math.max(60, W - BAR_X - 46 - CRAB_W)
+  const BAR_W = Math.max(60, W - BAR_X - 46 - CRAB_W - crewW)
   const color = f.isFinished ? DONE : ACCENT
   const y0 = (H - BAR_H) / 2
   const fillW = Math.round(BAR_W * ratio(f))
@@ -398,8 +402,9 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
 <rect x="${pillX}" width="${pillW}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${color}"/>
 <text x="${pillX + pillW / 2}" y="${BAR_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11" font-weight="600" fill="#ffffff">${xml(text)}</text>
 </g>
-<text class="m" x="${W - CRAB_W - 6}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
-${CRAB_CSS}${crab(W - CRAB_W + 1, 0, 'other', false, isWorking, 0.8)}
+<text class="m" x="${crabX - 7}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
+${CRAB_CSS}${crab(crabX, 0, 'other', false, isWorking, 0.8)}
+${crew ? `<text class="t" x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-weight="600" font-variant-numeric="tabular-nums">${crew}</text>` : ''}
 </svg>`
 }
 
@@ -573,9 +578,14 @@ const elapsed = (a: AgentRun, at: number): number => (a.endedAt ?? Math.max(at, 
 
 type Planned = PlannedTask & { n: number }
 
+// The list holds every subagent of the session; a flow's own are those started
+// since it began, plus any still running from before.
+const flowRuns = (f: Flow | null, list: AgentRun[]): AgentRun[] =>
+  f ? list.filter(a => a.status === 'running' || a.startedAt >= (f.startedAt ?? 0)) : []
+
 const plannedOf = (f: Flow | null, list: AgentRun[]): Planned[] => {
   if (!f || f.isFinished) return []
-  const started = new Set(list.map(a => norm(a.description)))
+  const started = new Set(flowRuns(f, list).map(a => norm(a.description)))
   return (f.tasks ?? []).map((t, i) => ({ ...t, n: i + 1 })).filter(t => !started.has(norm(t.title)))
 }
 
@@ -1319,12 +1329,9 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const input = e as unknown as ProgressInput
-    const prev = await read($, flow)
-    if (isNewFlow(prev, input) && input.title !== undefined) {
-      // A new flow starts with a clean list; agents still running stay.
-      await update($, agents, list => list.filter(a => a.status === 'running'))
-    }
-    const next = await update($, flow, p => merge(p, input))
+    // The agents list stays: it is the session's, and its runs carry their cost.
+    const at = await $.clock.now()
+    const next = await update($, flow, p => merge(p, input, at))
     if (next && input.tasks?.length) await autoOpen($, next.title)
     return { result: `ok: ${label(next ?? blank())}` }
   })
@@ -1350,8 +1357,9 @@ export const register: Register = (on, options) => {
     const type = String(e.subagent_type ?? '')
     if (!type.startsWith('savvy-')) return next(e)
 
+    const at = await $.clock.now()
     await update($, flow, prev => {
-      const base = prev && !prev.isFinished ? { ...blank(), ...prev } : blank()
+      const base = prev && !prev.isFinished ? { ...blank(), ...prev } : { ...blank(), startedAt: at }
       return { ...base, running: base.running + 1, phase: base.phase === 'plan' ? 'delegate' : base.phase }
     })
     try {
@@ -1366,8 +1374,11 @@ export const register: Register = (on, options) => {
     if (started.deny !== undefined) return started
 
     const at = await $.clock.now()
+    const current = await read($, flow)
     await update($, agents, list => {
-      const round = 1 + list.filter(a => norm(a.description) === norm(e.description) && e.description).length
+      // A round is a re-delegation within one flow; with no flow, within the session.
+      const peers = current ? flowRuns(current, list) : list
+      const round = 1 + peers.filter(a => norm(a.description) === norm(e.description) && e.description).length
       const run: AgentRun = {
         id: started.agentId ?? e.tool_use_id,
         agentId: started.agentId,
@@ -1750,18 +1761,20 @@ export const register: Register = (on, options) => {
     const isWorking = e.props.isWorking || list.some(a => a.status === 'running')
     const details = <Button key="savvy-details" label={s.details} plain dimColor onPress={() => void togglePane($)} />
 
-    const crew = f ? list.length + plannedOf(f, list).length : 0
-    const crewButton = <Button key="savvy-agents" label={`×${crew}`} plain onPress={() => void togglePane($)} />
+    // The flow's own crew: its runs and the tasks still planned. Details opens the panel.
+    const crew = f ? flowRuns(f, list).length + plannedOf(f, list).length : 0
+    const crewText = crew ? `${crew} ${s.agentsCount}` : ''
     const percent = f ? fmtPct(ratio(f) * 100) : ''
     const dismiss = <Button key="savvy-dismiss" label="✕" plain role="dismiss" onPress={() => update($, flow, () => null)} />
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
-      // About 8 CSS px per reported column; the rest is the buttons and their gaps.
+      // About 8 CSS px per reported column; the rest is the button and its gap
+      // (Details on the stats row, the dismiss on the flow row).
       // No floor above the slot: a row wider than it would wrap.
       const cols = e.props.bodyColumns || 100
       const stats = statsSvg(Math.max(180, Math.min(1600, cols * 8 - 120)), bandSegs(t, m, mt), isWorking)
-      const flowW = Math.max(180, Math.min(1600, cols * 8 - 96))
+      const flowW = Math.max(180, Math.min(1600, cols * 8 - 64))
       return (
         <Box flexDirection="column">
           <Box key="savvy-stats" flexDirection="row" alignItems="center" gap={1}>
@@ -1770,8 +1783,12 @@ export const register: Register = (on, options) => {
           </Box>
           {f && (
             <Box key="savvy-flow" flexDirection="row" alignItems="center" gap={1}>
-              <Svg source={rowSvg(f, flowW, list.some(a => a.status === 'running'))} alt={`${f.title}: ${label(f)}, ${percent}`} width={flowW} height={H} />
-              {crewButton}
+              <Svg
+                source={rowSvg(f, flowW, list.some(a => a.status === 'running'), crew)}
+                alt={`${f.title}: ${label(f)}, ${percent}${crewText ? `, ${crewText}` : ''}`}
+                width={flowW}
+                height={H}
+              />
               {dismiss}
             </Box>
           )}
@@ -1806,8 +1823,12 @@ export const register: Register = (on, options) => {
           <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>
           <Text bold>{label(f)}</Text>
           <Text dimColor>{percent}</Text>
-          <Text color={CLAY}>▣</Text>
-          {crewButton}
+          {crewText ? (
+            <Text>
+              <Text color={CLAY}>▣ </Text>
+              <Text dimColor>{crewText}</Text>
+            </Text>
+          ) : null}
           {dismiss}
         </Box>
       </Box>

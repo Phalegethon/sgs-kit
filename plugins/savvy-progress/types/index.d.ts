@@ -67,6 +67,8 @@ export type Flow = {
   phase: Phase
   isFinished: boolean
   tasks: PlannedTask[]
+  /** When the flow began: runs that started earlier belong to an earlier flow. */
+  startedAt?: number
 }
 
 export type AgentStatus = 'running' | 'done' | 'failed'
