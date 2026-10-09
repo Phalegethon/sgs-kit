@@ -115,6 +115,18 @@ test('the flow row counts only its own crew and draws no × button', { options: 
   // No dismiss on the row: Details is the band's only button.
   expect(desktop.match(/"type":"Button"/g)?.length).toBe(1)
 
+  // A narrow band drops the word first, then the percent; the alt keeps the whole figure.
+  const bandAt = async (bodyColumns: number) =>
+    JSON.stringify(await $.ui.render({ surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns } } as never))
+  const narrow = await bandAt(34)
+  expect(narrow).not.toContain('> agents<')
+  expect(narrow).toContain('>0%<')
+  expect(narrow).toContain('Redesign: Tasks 0/3, 0%, 3 agents')
+  const narrower = await bandAt(26)
+  expect(narrower).not.toContain('> agents<')
+  expect(narrower).not.toContain('>0%<')
+  expect(desktop).toContain('> agents<')
+
   const terminal = JSON.stringify(await $.ui.render(band('terminal')))
   expect(terminal).not.toMatch(/×\d/)
   expect(terminal).toContain('3 agents')

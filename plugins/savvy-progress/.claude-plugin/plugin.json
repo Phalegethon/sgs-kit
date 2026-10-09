@@ -1,6 +1,6 @@
 {
   "name": "savvy-progress",
-  "version": "1.2.0-sgs.5",
+  "version": "1.2.0-sgs.6",
   "description": "Session row above the prompt in every session (model, cost, tokens, context, 5-hour and 7-day limits, time) and a session panel (Details or /agents-info): cost split, usage limits, context by category, tokens by kind, cost by model, plus running, finished and planned subagents and the /savvy-flow progress bar. sgs-kit fork of johnnyvizz's savvy-progress.",
   "author": {
     "name": "Gürkan Süerdem",

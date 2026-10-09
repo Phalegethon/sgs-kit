@@ -341,18 +341,31 @@ const fitText = (s: string, size: number, maxW: number): string => {
 }
 
 // The right end reads "29%  🦀 2 agents": the crew is a figure, not a control.
+// On a narrow band the row gives way in order: the word "agents", then the percent
+// (the pill already says 2/7), then the title, so the bar always holds its pill.
 const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string => {
-  // The title takes what it needs, up to 40% of the row; the bar takes the rest.
-  const title = fitText(f.title, 13, Math.max(60, W * 0.4))
   const percent = fmtPct(ratio(f) * 100)
   const crewWord = ` ${tr().agentsCount}`
-  const crewW = crew ? Math.ceil(textWidth(String(crew), 12.5) + textWidth(crewWord, 11.5)) : 0
+  const text = label(f)
+  const pillW = Math.round(18 + text.length * 6.6)
+  const minBar = pillW + 24
   // At 0.8 the crab's body spans x 2.4 to 21.6 of its box and y 8 to 21: lifted 3 px
   // so it centres on the row's middle line, as the text and the bar do.
-  const crabX = Math.round(W - (crew ? crewW + 6 : 0) - 22)
+  const place = (hasWord: boolean, hasPercent: boolean) => {
+    const crewW = crew ? Math.ceil(textWidth(String(crew), 12.5) + (hasWord ? textWidth(crewWord, 11.5) : 0)) : 0
+    const crabX = Math.round(W - (crew ? crewW + 6 : 0) - 22)
+    const barEnd = hasPercent ? crabX - 4 - textWidth(percent, 12.5) - 12 : crabX - 6
+    return { hasWord, hasPercent, crabX, barEnd }
+  }
+  // The title takes what it needs, up to 40% of the row; the bar takes the rest.
+  const titleW = (end: number) => Math.min(W * 0.4, end - minBar - 28)
+  const fits = (l: ReturnType<typeof place>) => titleW(l.barEnd) >= Math.min(textWidth(f.title, 13), 60)
+  const layout = [place(true, true), place(false, true), place(false, false)].find(fits) ?? place(false, false)
+  const title = fitText(f.title, 13, Math.max(24, titleW(layout.barEnd)))
+  const { crabX, barEnd } = layout
   const percentX = crabX - 4
   const BAR_X = Math.round(16 + textWidth(title, 13) + 12)
-  const BAR_W = Math.max(60, Math.round(percentX - textWidth(percent, 12.5) - 12 - BAR_X))
+  const BAR_W = Math.max(minBar, Math.round(barEnd - BAR_X))
   const color = f.isFinished ? DONE : ACCENT
   const y0 = (H - BAR_H) / 2
   const fillW = Math.round(BAR_W * ratio(f))
@@ -382,8 +395,6 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string =>
     if (x > fillW + 4) ticks.push(`<rect x="${x}" y="${BAR_H / 2 - 4}" width="1.5" height="8" rx="0.75"/>`)
   }
 
-  const text = label(f)
-  const pillW = Math.round(18 + text.length * 6.6)
   const pillX = Math.max(0, Math.min(BAR_W - pillW, fillW - pillW))
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
@@ -409,9 +420,9 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string =>
 <rect x="${pillX}" width="${pillW}" height="${BAR_H}" rx="${BAR_H / 2}" fill="${color}"/>
 <text x="${pillX + pillW / 2}" y="${BAR_H / 2 + 4}" text-anchor="middle" font-family="${FONT}" font-size="11" font-weight="600" fill="#ffffff">${xml(text)}</text>
 </g>
-<text class="m" x="${percentX}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>
+${layout.hasPercent ? `<text class="m" x="${percentX}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-size="12.5" font-variant-numeric="tabular-nums">${percent}</text>` : ''}
 ${CRAB_CSS}${crab(crabX, -3, 'other', false, isWorking, 0.8)}
-${crew ? `<text x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-variant-numeric="tabular-nums"><tspan class="t" font-size="12.5" font-weight="600">${crew}</tspan><tspan class="m" font-size="11.5">${xml(crewWord)}</tspan></text>` : ''}
+${crew ? `<text x="${W}" y="${H / 2 + 4.5}" text-anchor="end" font-family="${FONT}" font-variant-numeric="tabular-nums"><tspan class="t" font-size="12.5" font-weight="600">${crew}</tspan>${layout.hasWord ? `<tspan class="m" font-size="11.5">${xml(crewWord)}</tspan>` : ''}</text>` : ''}
 </svg>`
 }
 
@@ -1037,9 +1048,9 @@ const bandText = (t: Totals, m: MainUsage, mt: Meter): string => {
 
 const BAND_GAP = 19
 
-// Returns the drawing and its width: the figures that fit, so the button sits right after them;
-// `padTo` widens it to the flow row's width, so the two rows' buttons share one column.
-const statsSvg = (W: number, segs: Seg[], isWorking: boolean, padTo = 0): { source: string; width: number } => {
+// Returns the drawing and its width: the figures that fit, and no more. `textWidth`
+// runs a few px short on figures, so the end keeps room for the last glyph.
+const statsSvg = (W: number, segs: Seg[], isWorking: boolean): { source: string; width: number } => {
   // Keep the most important figures that fit, then draw them in their own order.
   let used = 16
   const kept = new Set<Seg>()
@@ -1060,7 +1071,7 @@ const statsSvg = (W: number, segs: Seg[], isWorking: boolean, padTo = 0): { sour
       return out
     })
     .join('')
-  const width = Math.max(Math.ceil(x + 4), padTo)
+  const width = Math.ceil(x + 10)
   return { source: svg(width, H, `<circle${isWorking ? ' class="live"' : ''} cx="5" cy="${H / 2}" r="4" fill="${isWorking ? ACCENT : DONE}"/>${body}`), width }
 }
 
@@ -1855,15 +1866,16 @@ export const register: Register = (on, options) => {
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
-      // About 8 CSS px per reported column; the rest is Details and its gap. Both
-      // rows take the same slot, so their right edges line up.
-      // No floor above the slot: a row wider than it would wrap.
+      // The band is about 8 CSS px per reported column, less 8 of padding (measured
+      // on the desktop). The flow row has no button and takes the whole width, bar
+      // and all; the stats row keeps room for Details, pushed to the far end so it
+      // lines up with the flow row's end. No floor above the slot: a row wider would wrap.
       const cols = e.props.bodyColumns || 100
-      const flowW = Math.max(180, Math.min(1600, cols * 8 - 120))
-      const stats = statsSvg(flowW, bandSegs(t, m, mt), isWorking, f ? flowW : 0)
+      const flowW = Math.max(180, Math.min(1600, cols * 8 - 16))
+      const stats = statsSvg(Math.max(180, Math.min(1600, cols * 8 - 120)), bandSegs(t, m, mt), isWorking)
       return (
         <Box flexDirection="column">
-          <Box key="savvy-stats" flexDirection="row" alignItems="center" gap={1}>
+          <Box key="savvy-stats" flexDirection="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Svg source={stats.source} alt={bandText(t, m, mt)} width={stats.width} height={H} />
             {details}
           </Box>
