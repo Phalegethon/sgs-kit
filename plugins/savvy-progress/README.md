@@ -1,6 +1,6 @@
 # savvy-progress
 
-> **sgs-kit fork (1.2.0-sgs.6)** of savvy-progress from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit).
+> **sgs-kit fork (1.2.0-sgs.7)** of savvy-progress from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit).
 > It adds an always-on **session row** above the prompt (model, cost, tokens, context fill, the 5-hour and 7-day
 > limits, session time) whose **Details** button opens the **session panel**: cost with the main session /
 > subagent split, usage limits with reset times, the context window by category, tokens by kind with the cache
