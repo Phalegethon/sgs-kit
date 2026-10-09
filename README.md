@@ -57,6 +57,8 @@ Plugins from a third-party marketplace such as sgs-kit do not update on their ow
 
 **Auto-update, once:** in `/plugin`, go to **Marketplaces**, select **sgs-kit** and select **Enable auto-update**. Claude Code then checks a few minutes after your first message in a session and says `Plugin updated: <name> · Run /reload-plugins to apply`; the new version also loads on your next launch.
 
+The toggle is only there in a terminal `claude` session. The desktop app starts Claude Code with `DISABLE_AUTOUPDATER=1`, which hides the toggle and turns the background update off, so in the desktop app the plugin page keeps showing the old version and its **Update** button stays greyed until the catalog is refreshed. There, update by hand as below, or switch auto-update on from a terminal session: it updates the plugins on disk, and the desktop app loads the new version in its next session.
+
 **By hand:** refresh the catalog, then update each plugin:
 
 ```bash
