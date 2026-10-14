@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { AgentSpawnInput, EngineInterface, PluginOptions, Register } from 'claude-code'
 
 import type { AgentRun, Flow, MainUsage, Meter, Panel, Phase, PlannedTask, RateWindow, TokenSplit } from '../types'
 
@@ -108,6 +108,12 @@ const STRINGS = {
     estimate: '≈ API-equivalent estimate from token counts; not a bill',
     hideDone: 'Hide finished',
     showDone: 'Show finished',
+    auto: 'auto',
+    routedAlt: 'model set by routing',
+    routingHead: 'Subagent model routing, for an Agent call that names no model:',
+    routingUsage: 'Usage: /agent-routing on | off | explore <model> | general <model>, with model one of inherit, haiku, sonnet, opus, fable. inherit: the main session\'s model; opus: Opus whatever the main session runs on.',
+    routingSet: 'Saved; new subagents use it:',
+    routingDenied: 'Not saved',
   },
   ru: {
     pane: 'Сессия',
@@ -169,6 +175,12 @@ const STRINGS = {
     estimate: '≈ оценка по ценам API из числа токенов; не счёт',
     hideDone: 'Скрыть завершённые',
     showDone: 'Показать завершённые',
+    auto: 'авто',
+    routedAlt: 'модель выбрана маршрутизацией',
+    routingHead: 'Модель субагентов, когда вызов Agent не называет модель:',
+    routingUsage: 'Использование: /agent-routing on | off | explore <модель> | general <модель>, модель: inherit, haiku, sonnet, opus, fable. inherit: модель основной сессии; opus: Opus при любой модели основной сессии.',
+    routingSet: 'Сохранено; новые субагенты используют это:',
+    routingDenied: 'Не сохранено',
   },
   tr: {
     pane: 'Oturum',
@@ -230,6 +242,12 @@ const STRINGS = {
     estimate: '≈ token sayısından API fiyatıyla tahmin; fatura değil',
     hideDone: 'Bitenleri gizle',
     showDone: 'Bitenleri göster',
+    auto: 'otomatik',
+    routedAlt: 'model yönlendirmeyle seçildi',
+    routingHead: 'Alt ajan model yönlendirmesi, model belirtmeyen Agent çağrıları için:',
+    routingUsage: 'Kullanım: /agent-routing on | off | explore <model> | general <model>; model: inherit, haiku, sonnet, opus, fable. inherit: ana oturumun modeli; opus: ana oturum hangi modelde olursa olsun Opus.',
+    routingSet: 'Kaydedildi; yeni alt ajanlar bunu kullanır:',
+    routingDenied: 'Kaydedilmedi',
   },
 } as const
 
@@ -489,6 +507,25 @@ const costOf = (model: string, u: Usage): number => {
 // A planned task's model: the one the orchestrator named, else its tier's default.
 const plannedModel = (p: PlannedTask, tier: string): string =>
   p.model ? `${modelName(p.model)}${p.effort ? ' · ' + p.effort : ''}` : (TIER_MODEL[tier] ?? '')
+
+// Subagent model routing. Only built-in types with no model of their own are routed:
+// any other type may name one in its definition, which a hook cannot read and a
+// model on the call would override. A model the call names always wins.
+const ROUTE_MODELS: readonly string[] = ['inherit', 'haiku', 'sonnet', 'opus', 'fable']
+const ROUTE_OPTION: Record<string, 'exploreModel' | 'generalModel'> = { Explore: 'exploreModel', 'general-purpose': 'generalModel' }
+
+const routeOption = (options: PluginOptions, key: 'exploreModel' | 'generalModel'): string => {
+  const v = options[key]
+  return typeof v === 'string' && ROUTE_MODELS.includes(v) ? v : 'inherit'
+}
+
+// Forks always inherit, a workflow agent ignores a rewrite and a teammate keeps its own.
+const routeModel = (options: PluginOptions, e: AgentSpawnInput): string | undefined => {
+  const key = ROUTE_OPTION[e.subagentType]
+  if (!key || e.model || e.fork || e.workflow || e.isTeammate) return undefined
+  const model = routeOption(options, key)
+  return model === 'inherit' ? undefined : model
+}
 
 const windowOf = (model: string): number => (/haiku/i.test(model) ? 200_000 : 1_000_000)
 
@@ -1082,6 +1119,10 @@ const progressOf = (a: AgentRun): number | null => {
   return null
 }
 
+// The run's model, its effort, and "auto" when routing picked the model.
+const modelLabel = (a: AgentRun): string =>
+  `${modelName(a.model)}${a.effort ? ` · ${a.effort}` : ''}${a.routedModel ? ` · ${tr().auto}` : ''}`
+
 const ctxOf = (a: AgentRun): number => (a.contextMax ? Math.min(100, Math.round((a.contextTokens / a.contextMax) * 100)) : 0)
 
 // --- the subagents card: one card stacked from several drawings (its header, group
@@ -1149,7 +1190,7 @@ const agentPart = (W: number, a: AgentRun, at: number, k: number, isRuled: boole
   const ctx = ctxOf(a)
   const right = W - PAD
   const barW = right - ROW_X
-  const meta = [a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)]
+  const meta = [modelLabel(a)]
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   if (a.status === 'failed') meta.push(s.failed)
   const progress = progressOf(a)
@@ -1160,7 +1201,7 @@ const agentPart = (W: number, a: AgentRun, at: number, k: number, isRuled: boole
   const fillW = Math.round(barW * (progress ?? ctx / 100))
   return {
     key: a.id,
-    alt: `${a.description}: ${modelName(a.model)}, ${a.status === 'running' ? s.isRunning : s.isFinished}`,
+    alt: `${a.description}: ${modelName(a.model)}, ${a.status === 'running' ? s.isRunning : s.isFinished}${a.routedModel ? `, ${s.routedAlt}` : ''}`,
     draw: slice(
       W,
       66,
@@ -1359,6 +1400,11 @@ export const register: Register = (on, options) => {
       name: 'agents-info',
       description: 'Show or hide the panel of subagents: running, finished and planned, with model, context, cost and time',
     })
+    await $.command.register({
+      name: 'agent-routing',
+      description: 'Show or set the model Explore and general-purpose subagents get when the Agent call names none',
+      argumentHint: '[on | off | explore <model> | general <model>]',
+    })
 
     try {
       const u = await $.session.usage()
@@ -1412,6 +1458,31 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // `/agent-routing`: the desktop has no /config, so the two options are set from here.
+  // `$.config.set` writes the enabled install's own pluginConfigs entry, and the
+  // engine reloads the plugin with the new options.
+  on('command.run', { command: 'agent-routing' }, async ($, e) => {
+    const s = tr()
+    const current = { exploreModel: routeOption(options, 'exploreModel'), generalModel: routeOption(options, 'generalModel') }
+    const describe = (v: typeof current) => `  Explore: ${v.exploreModel}\n  general-purpose: ${v.generalModel}`
+    const words = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (!words.length) return { text: `${s.routingHead}\n${describe(current)}\n\n${s.routingUsage}` }
+
+    const [verb = '', model = ''] = words
+    let changes: Partial<typeof current> | undefined
+    if (words.length === 1 && verb === 'on') changes = { exploreModel: 'haiku', generalModel: 'sonnet' }
+    else if (words.length === 1 && verb === 'off') changes = { exploreModel: 'inherit', generalModel: 'inherit' }
+    else if (words.length === 2 && ROUTE_MODELS.includes(model))
+      changes = verb === 'explore' ? { exploreModel: model } : verb === 'general' ? { generalModel: model } : undefined
+    if (!changes) return { text: s.routingUsage }
+
+    for (const [key, value] of Object.entries(changes)) {
+      const result = await $.config.set({ key: `savvy-progress.${key}`, value })
+      if (result.deny !== undefined) return { text: `${s.routingDenied}: ${result.deny}` }
+    }
+    return { text: `${s.routingSet}\n${describe({ ...current, ...changes })}` }
+  })
+
   on('command.run', { command: 'agents-info' }, async $ => {
     const isOpen = await togglePane($)
     return { text: isOpen ? tr().opened : tr().closed }
@@ -1460,7 +1531,9 @@ export const register: Register = (on, options) => {
   })
 
   on('agent.spawn', async ($, e, next) => {
-    const started = await next(e)
+    // The documented place to pick a subagent's model: the spawn's `model`, set before `next`.
+    const routed = routeModel(options, e)
+    const started = await next(routed ? { ...e, model: routed } : e)
     if (started.deny !== undefined) return started
 
     const at = await $.clock.now()
@@ -1483,6 +1556,7 @@ export const register: Register = (on, options) => {
         costUsd: 0,
         steps: 0,
         round,
+        ...(routed ? { routedModel: routed } : {}),
       }
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
@@ -1721,7 +1795,7 @@ export const register: Register = (on, options) => {
       const color = colorOf(tier)
       const ctx = ctxOf(a)
       const progress = progressOf(a)
-      const model = a.effort ? `${modelName(a.model)} · ${a.effort}` : modelName(a.model)
+      const model = modelLabel(a)
       const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''} · ` : ''
       return (
         <Box key={a.id} flexDirection="column" marginBottom={1}>

@@ -90,6 +90,8 @@ export type AgentRun = {
   steps: number
   round: number
   split?: TokenSplit
+  /** The model routing gave the run, when the Agent call named none (`exploreModel`, `generalModel`). */
+  routedModel?: string
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number

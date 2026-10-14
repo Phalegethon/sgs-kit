@@ -1,6 +1,6 @@
 {
   "name": "savvy-progress",
-  "version": "1.2.0-sgs.7",
+  "version": "1.2.0-sgs.8",
   "description": "Session row above the prompt in every session (model, cost, tokens, context, 5-hour and 7-day limits, time) and a session panel (Details or /agents-info): cost split, usage limits, context by category, tokens by kind, cost by model, plus running, finished and planned subagents and the /savvy-flow progress bar. sgs-kit fork of johnnyvizz's savvy-progress.",
   "author": {
     "name": "Gürkan Süerdem",
@@ -18,6 +18,32 @@
         "en",
         "ru",
         "tr"
+      ]
+    },
+    "exploreModel": {
+      "type": "string",
+      "title": "Explore subagent model",
+      "description": "Model for an Explore subagent when the Agent call names none. inherit: the main session's model; opus: Opus whatever the main session runs on",
+      "default": "inherit",
+      "options": [
+        "inherit",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
+      ]
+    },
+    "generalModel": {
+      "type": "string",
+      "title": "General-purpose subagent model",
+      "description": "Model for a general-purpose subagent (also an Agent call without a type) when the call names none. inherit: the main session's model; opus: Opus whatever the main session runs on",
+      "default": "inherit",
+      "options": [
+        "inherit",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable"
       ]
     }
   },

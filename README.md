@@ -36,6 +36,7 @@ savvy-progress `1.2.0-sgs.*`:
 - **Cost** is Claude Code's own ledger (what `/cost` shows) when the host keeps one, else an API-equivalent estimate from token counts. Either way it is not a bill, which is the useful reading on a subscription.
 - **Planned tasks** may name their `model` and `effort`, so a Haiku or Sonnet task is not shown as Opus.
 - **Turkish** panel language (`language: tr`), beside English and Russian.
+- **Subagent model routing** (off by default): an Explore or general-purpose Agent call that names no model gets the model you chose instead of the main session's, set with `/agent-routing`. A model named on the call and any agent with its own definition are never touched. See [savvy-progress](plugins/savvy-progress#subagent-model-routing-off-by-default).
 
 ## Install
 

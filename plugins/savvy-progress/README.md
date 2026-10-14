@@ -1,6 +1,6 @@
 # savvy-progress
 
-> **sgs-kit fork (1.2.0-sgs.7)** of savvy-progress from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit).
+> **sgs-kit fork (1.2.0-sgs.8)** of savvy-progress from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit).
 > It adds an always-on **session row** above the prompt (model, cost, tokens, context fill, the 5-hour and 7-day
 > limits, session time) whose **Details** button opens the **session panel**: cost with the main session /
 > subagent split, usage limits with reset times, the context window by category, tokens by kind with the cache
@@ -34,5 +34,31 @@ Cost is a rough estimate from token counts and a built-in per-model price table 
 ```json
 { "pluginConfigs": { "savvy-progress": { "options": { "language": "ru" } } } }
 ```
+
+## Subagent model routing (off by default)
+
+An Agent call that names no `model` runs on the main session's model: under Opus, every quick Explore search runs on Opus too. With routing on, savvy-progress gives such a call a model of your choice, by agent type:
+
+- `exploreModel`: Explore subagents.
+- `generalModel`: general-purpose subagents, which is also what an Agent call without a type starts.
+
+Each takes `inherit` (default: routing off), `haiku`, `sonnet`, `opus` or `fable`.
+
+- `inherit`: the subagent gets the main session's model, as Claude Code does on its own.
+- `opus`: the subagent runs on Opus whatever model the main session uses. Pick it if a call with no model should go to the top model even when the session runs on Sonnet or Haiku.
+
+Routing never overrides a choice that was made: a model named on the Agent call wins, and any other agent type (your own agents, a plugin's agents such as the savvy tiers, `Plan`, forks, workflow agents, teammates) is left alone, since its definition may name a model of its own. A routed run shows `auto` next to its model in the panel.
+
+Set it with `/agent-routing`, which also works in the desktop app, where there is no `/config`:
+
+```
+/agent-routing                 show the current settings
+/agent-routing on              Explore on haiku, general-purpose on sonnet
+/agent-routing explore haiku   one type at a time
+/agent-routing general opus
+/agent-routing off             both back to inherit
+```
+
+The change is saved to the plugin's own `pluginConfigs` entry in `~/.claude/settings.json` and applies to subagents started after it. Claude Code's own `CLAUDE_CODE_SUBAGENT_MODEL` sets one default for every agent type without a model; routing, being a model on the call, takes precedence over it for Explore and general-purpose, and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` takes precedence over routing.
 
 Install instructions are in the [repository README](../../README.md).
