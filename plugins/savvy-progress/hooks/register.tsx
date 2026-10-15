@@ -92,6 +92,8 @@ const STRINGS = {
     failed: 'error',
     after: 'after',
     tokensWord: 'tokens',
+    agentOne: 'agent',
+    agentFew: 'agents',
     agentsCount: 'agents',
     isRunning: 'running',
     isFinished: 'finished',
@@ -116,6 +118,7 @@ const STRINGS = {
     routingSet: 'Saved; new subagents use it:',
     routingDenied: 'Not saved',
     inView: 'In view',
+    wholeSession: 'Whole session',
     workflow: 'Workflow',
   },
   ru: {
@@ -161,6 +164,8 @@ const STRINGS = {
     failed: 'ошибка',
     after: 'после',
     tokensWord: 'токенов',
+    agentOne: 'агент',
+    agentFew: 'агента',
     agentsCount: 'агентов',
     isRunning: 'работает',
     isFinished: 'завершён',
@@ -185,6 +190,7 @@ const STRINGS = {
     routingSet: 'Сохранено; новые субагенты используют это:',
     routingDenied: 'Не сохранено',
     inView: 'В фокусе',
+    wholeSession: 'Вся сессия',
     workflow: 'Воркфлоу',
   },
   tr: {
@@ -230,6 +236,8 @@ const STRINGS = {
     failed: 'hata',
     after: 'sonra',
     tokensWord: 'token',
+    agentOne: 'ajan',
+    agentFew: 'ajan',
     agentsCount: 'ajan',
     isRunning: 'çalışıyor',
     isFinished: 'bitti',
@@ -254,6 +262,7 @@ const STRINGS = {
     routingSet: 'Kaydedildi; yeni alt ajanlar bunu kullanır:',
     routingDenied: 'Kaydedilmedi',
     inView: 'Görüntülenen',
+    wholeSession: 'Tüm oturum',
     workflow: 'İş akışı',
   },
 } as const
@@ -261,6 +270,15 @@ const STRINGS = {
 // Module scope is fine here: session.start sets it again on every (re)load.
 let lang: Lang = 'en'
 const tr = () => STRINGS[lang]
+
+// "1 agent", "2 agents"; Russian has three forms (1 агент, 3 агента, 5 агентов).
+const agentWord = (n: number): string => {
+  const s = tr()
+  const one = n % 10 === 1 && n % 100 !== 11
+  const few = n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)
+  if (lang === 'ru') return one ? s.agentOne : few ? s.agentFew : s.agentsCount
+  return n === 1 ? s.agentOne : s.agentsCount
+}
 
 const langOf = (v: unknown): Lang =>
   typeof v !== 'string' ? 'en' : /^(ru|russian|рус)/i.test(v.trim()) ? 'ru' : /^(tr|turkish|türk)/i.test(v.trim()) ? 'tr' : 'en'
@@ -370,7 +388,7 @@ const fitText = (s: string, size: number, maxW: number): string => {
 // (the pill already says 2/7), then the title, so the bar always holds its pill.
 const rowSvg = (f: Flow, W: number, isWorking: boolean, crew: number): string => {
   const percent = fmtPct(ratio(f) * 100)
-  const crewWord = ` ${tr().agentsCount}`
+  const crewWord = ` ${agentWord(crew)}`
   const text = label(f)
   const pillW = Math.round(18 + text.length * 6.6)
   const minBar = pillW + 24
@@ -1194,9 +1212,16 @@ const agentSegs = (a: AgentRun, at: number, k: number): Seg[] => {
   ]
 }
 
-// The run of the agent in view, when the panel saw it start (a remote agent it did not).
-const viewed = (list: AgentRun[], agentId: string | undefined): AgentRun | undefined =>
-  agentId ? list.find(a => a.agentId === agentId) : undefined
+// The run of the agent in view, when the panel saw it start (a remote agent it did
+// not): the engine's own view (a transcript opened from the terminal's tasks list)
+// wins over the run the person picked in the panel.
+const viewed = (list: AgentRun[], view: string | undefined, picked: string | undefined): AgentRun | undefined => {
+  const id = view ?? picked
+  return id ? list.find(a => a.agentId === id || a.id === id) : undefined
+}
+
+const SESSION = 'session'
+const FOCUS_KEY = 'savvy-focus'
 
 const agentText = (a: AgentRun, at: number, k: number): string => {
   const s = tr()
@@ -1342,12 +1367,12 @@ const compactPart = (W: number, list: AgentRun[], planned: Planned[], t: Totals)
   const x = PAD - 4 + shown.length * 36 + (more ? 4 : 0)
   return {
     key: 'agents-compact',
-    alt: `${list.length} ${tr().agentsCount}`,
+    alt: `${list.length} ${agentWord(list.length)}`,
     draw: slice(
       W,
       38,
       `${body}${more ? txt(x, 25, `+${more}`, { cls: 's' }) : ''}
-${txt(W - PAD, 25, `≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}`, { cls: 's', anchor: 'end', num: true })}`,
+${txt(W - PAD, 25, `≈${fmtCost(t.agentsCost)} · ${fmtTokens(list.reduce((n, a) => n + a.tokens, 0))} · ${fmtTime(t.time)}`, { cls: 's', anchor: 'end', num: true })}`,
     ),
   }
 }
@@ -1858,7 +1883,7 @@ export const register: Register = (on, options) => {
     const title = f && !f.isFinished ? f.title : ''
     const cost = (t.isLedger ? '' : '≈') + fmtCost(t.cost)
     // The agent whose transcript the person opened from the tasks list leads the pane.
-    const focus = viewed(list, e.props.view?.agentId)
+    const focus = viewed(list, e.props.view?.agentId, p.focusAgentId)
 
     const toggleCompact = (
       <Button
@@ -1898,7 +1923,7 @@ export const register: Register = (on, options) => {
       const limitsAlt = mt.rateLimits.map(r => `${rateLabel(r.kind, false)} ${fmtPct(r.percentUsed)}`).join(', ')
 
       // The subagents card: header, then a labelled group per state, each row its own slice.
-      const parts: Part[] = [headPart(W, list.length ? `${list.length} ${s.agentsCount} · ≈${fmtCost(t.agentsCost)}` : '')]
+      const parts: Part[] = [headPart(W, list.length ? `${list.length} ${agentWord(list.length)} · ≈${fmtCost(t.agentsCost)}` : '')]
       if (isEmpty) parts.push(emptyPart(W))
       else if (p.isCompact) parts.push(compactPart(W, list, planned, t))
       else {
@@ -1928,6 +1953,23 @@ export const register: Register = (on, options) => {
             { ...agentPart(W, focus, at, t.k, false), key: `focus-${focus.id}` },
           ])
         : null
+      // The desktop shows a subagent's transcript in its own view, which the engine
+      // does not report: the person picks the run to keep in view here. A Select's
+      // pick survives a redraw, as a Button's press does not.
+      const runs = [...running, ...finished].slice(0, 40)
+      const focusPicker =
+        'Select' in ui && runs.length ? (
+          <ui.Select
+            key={FOCUS_KEY}
+            label={s.inView}
+            value={focus && !e.props.view?.agentId ? (focus.agentId ?? focus.id) : SESSION}
+            options={[
+              { value: SESSION, label: s.wholeSession },
+              ...runs.map(a => ({ value: a.agentId ?? a.id, label: clip(a.description || a.type, 48) })),
+            ]}
+            onSelect={v => update($, panel, prev => ({ ...prev, focusAgentId: v === SESSION ? undefined : v }))}
+          />
+        ) : null
       // The card's controls sit under it, from its left edge: text buttons, as Details is.
       const agentsControls = isEmpty ? null : (
         <Box key="agents-controls" flexDirection="row" gap={2}>
@@ -1951,6 +1993,7 @@ export const register: Register = (on, options) => {
               {title}
             </Text>
           ) : null}
+          {focusPicker}
           {focusCard}
           <Svg source={heroSvg(W, t)} alt={`${s.sessionCost}: ${summary}`} width={W} height={HERO_H} />
           {mt.rateLimits.length > 0 && (
@@ -2127,7 +2170,7 @@ export const register: Register = (on, options) => {
     const t = totals(list, at, m, mt)
     const isWorking = e.props.isWorking || list.some(a => a.status === 'running')
     // While one agent's transcript is in view the stats row is that agent's.
-    const focus = viewed(list, e.props.view?.agentId)
+    const focus = viewed(list, e.props.view?.agentId, (await read($, panel)).focusAgentId)
     const segs = focus ? agentSegs(focus, at, t.k) : bandSegs(t, m, mt)
     const statsAlt = focus ? agentText(focus, at, t.k) : bandText(t, m, mt)
     const isBusy = focus ? focus.status === 'running' : isWorking
@@ -2135,7 +2178,7 @@ export const register: Register = (on, options) => {
 
     // The flow's own crew: its runs and the tasks still planned. Details opens the panel.
     const crew = f ? flowRuns(f, list).length + plannedOf(f, list).length : 0
-    const crewText = crew ? `${crew} ${s.agentsCount}` : ''
+    const crewText = crew ? `${crew} ${agentWord(crew)}` : ''
     const percent = f ? fmtPct(ratio(f) * 100) : ''
 
     if (e.surface === 'desktop' && 'Svg' in ui) {

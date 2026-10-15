@@ -65,6 +65,10 @@ const band = (surface: 'desktop' | 'terminal', agentId?: string) =>
     props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, ...(agentId ? { view: { agentId } } : {}) },
   }) as never
 
+// The drawing without the desktop's focus picker, whose options name every run.
+const cards = (tree: unknown): string =>
+  JSON.stringify(tree, (_k, v: unknown) => ((v as { type?: string } | null)?.type === 'Select' ? undefined : v))
+
 // Two root runs, a child of the first, and a workflow of two agents.
 const crew = async ($: Engine) => {
   await $.session.start({ cwd: '/tmp', surface: 'desktop', isInteractive: true })
@@ -93,7 +97,7 @@ test('a nested run follows its parent, indented; a workflow gets one header', { 
   expect(at('Review step one')).toBeGreaterThan(at('Workflow wf_review42 · 2'))
   expect(at('Review step two')).toBeGreaterThan(at('Review step one'))
 
-  const desktop = JSON.stringify(await $.ui.render(pane('desktop')))
+  const desktop = cards(await $.ui.render(pane('desktop')))
   const dt = (s: string) => desktop.indexOf(s)
   expect(dt('Trace one call')).toBeGreaterThan(dt('Map the parser'))
   expect(dt('Workflow wf_review42 · 2')).toBeGreaterThan(-1)
@@ -108,11 +112,11 @@ test('the agent in view leads the pane and takes over the band', { options: { la
   await step($, 'a-u2')
 
   // The main conversation in view: nothing changes.
-  const plain = JSON.stringify(await $.ui.render(pane('desktop')))
+  const plain = cards(await $.ui.render(pane('desktop')))
   expect(plain).not.toContain('In view')
   expect(JSON.stringify(await $.ui.render(band('desktop')))).toContain('Cost')
 
-  const desktop = JSON.stringify(await $.ui.render(pane('desktop', 'a-u2')))
+  const desktop = cards(await $.ui.render(pane('desktop', 'a-u2')))
   expect(desktop).toContain('In view')
   expect(desktop.indexOf('Read the tests')).toBeLessThan(desktop.indexOf('Session cost'))
 
@@ -132,4 +136,62 @@ test('the agent in view leads the pane and takes over the band', { options: { la
 
   // An agent the panel never saw (a remote one) leaves the band as it was.
   expect(JSON.stringify(await $.ui.render(band('desktop', 'a-unknown')))).not.toContain('Read the tests')
+})
+
+test('the collapsed card sums the subagents, not the whole session', { options: { language: 'en' } }, async ($, on) => {
+  engine(on)
+  on('session.measure', async (_$, e) => ({ changed: e.changed }))
+  await $.session.start({ cwd: '/tmp', surface: 'desktop', isInteractive: true })
+  // The engine's ledger: $8 for the whole session.
+  await $.session.measure({ context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 8 }, changed: ['cost'] } as never)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await spawn($, 'u1', 'Map the parser')
+  await step($, 'a-u1')
+  // The main loop's own request: 1M input tokens of Haiku, $1, as the agent's: each is half the ledger.
+  const main = $.turn.step({ turnId: 't1', index: 0, model: 'claude-haiku-5-5', messageCount: 1 })
+  for await (const _chunk of main) void _chunk
+  await main.result
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1000, isAborted: false, reason: 'answer' })
+
+  await $.ui.render(pane('desktop'))
+  await $.ui.press({ plugin: 'savvy-progress', key: 'compact', requestId: PANE })
+  const collapsed = JSON.stringify(await $.ui.render(pane('desktop')))
+  expect(collapsed).toContain('1 agent · ≈$4.00')
+  // The row beside the crabs: the agent's $4 and its 1M tokens, not the session's $8 and 2M.
+  expect(collapsed).toContain('≈$4.00 · 1.0M')
+  expect(collapsed).not.toContain('≈$8.00 · ')
+})
+
+test('on the desktop, picking a run in the panel puts it in view; the session takes it back', { options: { language: 'en' } }, async ($, on) => {
+  engine(on)
+  await crew($)
+  await step($, 'a-u2')
+
+  const before = JSON.stringify(await $.ui.render(pane('desktop')))
+  expect(cards(JSON.parse(before))).not.toContain('In view')
+  // The picker lists the session first, then every run.
+  expect(before).toContain('"key":"savvy-focus"')
+  expect(before).toContain('"label":"Whole session"')
+  expect(before).toContain('"label":"Read the tests"')
+
+  // The desktop's element table takes the tree as drawn: a refused one would not mount.
+  const mount = (target: object) => $.ui.mount({ plugin: 'savvy-progress', ...target } as never)
+  await mount(pane('desktop'))
+  await mount(band('desktop'))
+  await mount(pane('terminal'))
+
+  await $.ui.select({ plugin: 'savvy-progress', key: 'savvy-focus', value: 'a-u2' })
+  const pinned = cards(await $.ui.render(pane('desktop')))
+  expect(pinned.indexOf('Read the tests')).toBeLessThan(pinned.indexOf('Session cost'))
+  expect(pinned).toContain('In view')
+  // The band follows the pick, as it follows the engine's own view.
+  const row = JSON.stringify(await $.ui.render(band('desktop')))
+  expect(row).toContain('Read the tests')
+  expect(row).toContain('≈$1.00')
+
+  // The engine's view wins over the pick while it lasts.
+  expect(JSON.stringify(await $.ui.render(band('desktop', 'a-u1')))).toContain('Map the parser')
+
+  await $.ui.select({ plugin: 'savvy-progress', key: 'savvy-focus', value: 'session' })
+  expect(JSON.stringify(await $.ui.render(band('desktop')))).not.toContain('Read the tests')
 })

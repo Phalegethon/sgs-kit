@@ -114,6 +114,8 @@ export type Panel = {
   autoOpenedFor: string
   /** The person closed the panel: subagents outside a flow leave it closed until they open it. */
   isAutoOff?: boolean
+  /** The run the person picked to keep in view on a surface with no agent view of its own. */
+  focusAgentId?: string
 }
 
 /**
