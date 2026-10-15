@@ -1,5 +1,6 @@
 // Subagents belong to the session: a new flow must not drop the ones an earlier flow ran.
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 const usage = (model: string, input: number, output: number) => ({
@@ -42,7 +43,7 @@ const band = (surface: 'desktop' | 'terminal') =>
   }) as never
 
 // One finished Haiku run under the current flow.
-const runAgent = async ($: Parameters<Parameters<typeof test>[2]>[0], id: string, description: string) => {
+const runAgent = async ($: Engine, id: string, description: string) => {
   const spawned = await $.agent.spawn({
     tool_use_id: id,
     prompt: 'go',

@@ -19,7 +19,8 @@ const engine = (on: On) => {
   on('turn.complete', async () => ({ text: '' }))
   on('ui.panes', async () => ({ value: [] }))
   on('ui.open', async () => ({ value: { isPlaced: true as const } }))
-  on('clock.now', async () => ({ value: 1_000_000 }))
+  let at = 1_000_000
+  on('clock.now', async () => ({ value: (at += 1000) }))
   on('clock.every', async () => ({ value: undefined }))
 }
 

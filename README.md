@@ -50,6 +50,12 @@ In Claude Code:
 /plugin install savvy-progress@sgs-kit
 ```
 
+On Claude Code 2.1.275 or later, each plugin also installs in one step, marketplace included:
+
+```
+/plugin install savvy-progress --marketplace Phalegethon/sgs-kit
+```
+
 Restart the session afterwards. Plugin skills and agents are namespaced: the skill is `/savvy-flow:savvy-flow`, the agents `savvy-flow:savvy-careful` and so on.
 
 ### Updating

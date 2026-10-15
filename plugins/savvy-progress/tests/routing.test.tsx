@@ -1,6 +1,7 @@
 // Subagent model routing: a built-in agent type with no model of its own (Explore,
 // general-purpose) gets the configured model when the Agent call names none.
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 type Seen = { type: string; model: string | undefined }
@@ -25,7 +26,7 @@ const engine = (on: On, seen: Seen[], sets: [string, unknown][] = []) => {
   })
 }
 
-const spawn = ($: Parameters<Parameters<typeof test>[2]>[0], id: string, fields: Record<string, unknown>) =>
+const spawn = ($: Engine, id: string, fields: Record<string, unknown>) =>
   $.agent.spawn({
     tool_use_id: id,
     prompt: 'go',

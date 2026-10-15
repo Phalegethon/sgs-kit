@@ -18,7 +18,7 @@ Drawn by the mod's own rendering code with sample data; more in the [repository 
 
 - **Session row** (fork): always on; figures drop by priority as the band narrows, gauges turn amber at 70 % and red at 90 %, and the figure is always printed.
 - **Progress bar**: the flow's title, phase, accepted tasks out of planned, and the flow's crew size (its runs plus the tasks still planned) beside the crab. The band follows the window: on a narrow one the row drops the word "agents", then the percent, then shortens the title. A finished flow shows Done until your next prompt, then leaves; there is no dismiss, so nothing can hide a running flow. Subagents belong to the session: a new flow keeps the runs of earlier ones, so their cost stays in the totals. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts.
-- **Session panel** (`/agents-info` or the row's Details button toggles it): the session cards above, then a subagents card of running, finished and planned subagents with model, effort, task progress, context, estimated cost and time, with Collapse and Hide finished under it. Working crabs walk, and each savvy tier animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.
+- **Session panel** (`/agents-info` or the row's Details button toggles it): the session cards above, then a subagents card of running, finished and planned subagents with model, effort, task progress, context, estimated cost and time, with Collapse and Hide finished under it. It opens itself when a flow reports its plan, and once a turn when any subagent starts, the model's own Explore or general-purpose included; close it and only a new flow opens it again until you open it yourself. Details on a panel hidden behind another tab brings it forward rather than closing it. The panel and the row redraw at most every two seconds while tokens stream in, so their buttons stay pressable. Working crabs walk, and each savvy tier animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.
 
 ## Tools it adds
 
@@ -61,4 +61,10 @@ Set it with `/agent-routing`, which also works in the desktop app, where there i
 
 The change is saved to the plugin's own `pluginConfigs` entry in `~/.claude/settings.json` and applies to subagents started after it. Claude Code's own `CLAUDE_CODE_SUBAGENT_MODEL` sets one default for every agent type without a model; routing, being a model on the call, takes precedence over it for Explore and general-purpose, and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` takes precedence over routing.
 
-Install instructions are in the [repository README](../../README.md).
+On Claude Code 2.1.275 or later, one step:
+
+```
+/plugin install savvy-progress --marketplace Phalegethon/sgs-kit
+```
+
+More install options are in the [repository README](../../README.md).

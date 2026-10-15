@@ -1,8 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { AgentSpawnInput, EngineInterface, PluginOptions, Register } from 'claude-code'
 
-import type { AgentRun, Flow, MainUsage, Meter, Panel, Phase, PlannedTask, RateWindow, TokenSplit } from '../types'
+import type { AgentRun, AgentStatus, Flow, Frame, MainUsage, Meter, Panel, Phase, PlannedTask, RateWindow, TokenSplit } from '../types'
 
+const MAIN0: MainUsage = { model: '', tokens: 0, costUsd: 0, steps: 0 }
+const METER0: Meter = { startedAt: 0, contextWindow: 0, rateLimits: [] }
+
+// The live values, written as events arrive; the drawings read `frame` alone.
 const flow = atom({ plugin: 'savvy-progress', key: 'flow' } as const, null)
 const agents = atom({ plugin: 'savvy-progress', key: 'agents' } as const, [])
 const panel = atom({ plugin: 'savvy-progress', key: 'panel' } as const, {
@@ -10,18 +14,15 @@ const panel = atom({ plugin: 'savvy-progress', key: 'panel' } as const, {
   isDoneCollapsed: false,
   autoOpenedFor: '',
 })
-const now = atom({ plugin: 'savvy-progress', key: 'now' } as const, 0)
-const main = atom({ plugin: 'savvy-progress', key: 'main' } as const, {
-  model: '',
-  tokens: 0,
-  costUsd: 0,
-  steps: 0,
-} as MainUsage)
-const meter = atom({ plugin: 'savvy-progress', key: 'meter' } as const, {
-  startedAt: 0,
-  contextWindow: 0,
-  rateLimits: [],
-} as Meter)
+const main = atom({ plugin: 'savvy-progress', key: 'main' } as const, MAIN0)
+const meter = atom({ plugin: 'savvy-progress', key: 'meter' } as const, METER0)
+const frame = atom({ plugin: 'savvy-progress', key: 'frame' } as const, {
+  flow: null,
+  agents: [],
+  main: MAIN0,
+  meter: METER0,
+  at: 0,
+} as Frame)
 
 const TOOL = 'mcp__savvy-progress__progress'
 const STEP_TOOL = 'mcp__savvy-progress__step'
@@ -896,8 +897,8 @@ const heroSvg = (W: number, t: Totals): string => {
     s.sessionCost,
     t.isLedger ? '/cost' : s.estimated,
     `${txt(PAD, 60, cost, { size: 28, weight: 650, num: true })}
-${stat(W - PAD, hasActive ? s.active : s.elapsed, fmtTime(hasActive ? t.activeMs : t.sessionMs))}
-${hasActive ? stat(W - PAD - 86, s.elapsed, fmtTime(t.sessionMs)) : ''}
+${stat(W - PAD, hasActive ? s.active : s.elapsed, hasActive ? fmtTime(t.activeMs) : fmtSpan(t.sessionMs))}
+${hasActive ? stat(W - PAD - 86, s.elapsed, fmtSpan(t.sessionMs)) : ''}
 ${sum ? stackBar(PAD, 74, inner, 8, [{ w: mainW, color: ACCENT }, { w: inner - mainW, color: CLAY }]) : meterBar(PAD, 74, inner, 8, 0, ACCENT)}
 ${swatch(PAD, 104, ACCENT)}${txt(PAD + 13, 104, mainLegend, { size: 11.5, cls: 's', num: true })}
 ${swatch(agentsX, 104, CLAY)}${txt(agentsX + 13, 104, `${s.subagents} ≈${fmtCost(t.agentsCost)}`, { size: 11.5, cls: 's', num: true })}`,
@@ -1274,26 +1275,94 @@ const ctxBar = (pct: number, width: number): string => {
 
 const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', failed: '✗', planned: '◷' }
 
-// Opens the agents pane, or closes it when it is up; true when it ends up open.
+// Opens the agents pane, or closes it when the person sees it; true when it ends up
+// open. A pane behind another tab, or one waiting unplaced on a narrow surface, is
+// brought forward: closing what the person cannot see would read as a dead button.
 async function togglePane($: EngineInterface): Promise<boolean> {
-  const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
-  if (isOpen) {
+  if (await isPaneShown($)) {
     await $.ui.close({ id: PANE })
     return false
   }
-  const at = await $.clock.now()
-  await update($, now, () => at)
-  await $.ui.open({ id: PANE, title: tr().pane })
+  await update($, panel, prev => ({ ...prev, isAutoOff: false }))
+  await $.ui.open({ id: PANE, title: tr().pane, focus: true })
+  await publish($)
   void refreshBreakdown($)
   return true
 }
 
-const isPaneOpen = async ($: EngineInterface): Promise<boolean> => {
+// True while the pane is placed and in front: the only time its drawing is seen.
+const isPaneShown = async ($: EngineInterface): Promise<boolean> => {
   try {
-    return (await $.ui.panes()).some(p => p.id === PANE)
+    return (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced && p.isShown)
   } catch {
     return false
   }
+}
+
+type Live = Omit<Frame, 'at'>
+
+// Every redraw hands the desktop new button handles, and a press that lands on a
+// retired one is dropped. So the drawings read a frame, not the live values: it
+// moves at once for what the person should see now (a run starts or ends, a flow
+// reports), at most every PUBLISH_MS while tokens stream in, and once a minute idle.
+// Module scope is fine: a reload publishes again from session.start.
+const PUBLISH_MS = 2000
+let publishedAt = Number.NEGATIVE_INFINITY
+let isDirty = false
+
+// `fresh` hands over values this dispatch just wrote, which its own reads may not see.
+async function publish($: EngineInterface, fresh: Partial<Live> = {}, isUrgent = true): Promise<void> {
+  const at = await $.clock.now()
+  if (!isUrgent && at - publishedAt < PUBLISH_MS) {
+    isDirty = true
+    return
+  }
+  publishedAt = at
+  isDirty = false
+  const live: Live = {
+    flow: 'flow' in fresh ? (fresh.flow ?? null) : await read($, flow),
+    agents: fresh.agents ?? (await read($, agents)),
+    main: fresh.main ?? (await read($, main)),
+    meter: fresh.meter ?? (await read($, meter)),
+  }
+  await update($, frame, () => ({ ...live, at }))
+}
+
+const isLive = (f: Frame): boolean => f.agents.some(a => a.status === 'running') || f.main.turnStartedAt !== undefined
+
+// Once a second: a dirty frame goes out, a live one while the pane shows it (its
+// clocks tick), an idle one when the minute turns (the band's session time).
+async function tick($: EngineInterface): Promise<void> {
+  const at = await $.clock.now()
+  const f = await read($, frame)
+  const isNewMinute = Math.floor(at / 60000) !== Math.floor(f.at / 60000)
+  if (isDirty || isNewMinute || (isLive(f) && (await isPaneShown($)))) await publish($, {}, false)
+  if (f.agents.some(a => a.status === 'running') && at - reconciledAt >= RECONCILE_MS) await reconcile($)
+}
+
+// A run the engine stopped (TaskStop, a killed background agent) may raise no
+// turn.complete: the engine's own list says how it ended.
+const RECONCILE_MS = 10000
+let reconciledAt = Number.NEGATIVE_INFINITY
+
+const ENDED: Partial<Record<string, AgentStatus>> = { completed: 'done', failed: 'failed', killed: 'failed' }
+
+async function reconcile($: EngineInterface): Promise<void> {
+  const at = await $.clock.now()
+  reconciledAt = at
+  let ended: Map<string, AgentStatus>
+  try {
+    const list = await $.agent.list()
+    ended = new Map(list.flatMap(a => (ENDED[a.status] ? [[a.id, ENDED[a.status] as AgentStatus] as const] : [])))
+  } catch {
+    return
+  }
+  const isStale = (a: AgentRun) => a.status === 'running' && a.agentId !== undefined && ended.has(a.agentId)
+  if (!(await read($, agents)).some(isStale)) return
+  const next = await update($, agents, list =>
+    list.map(a => (isStale(a) ? { ...a, status: ended.get(a.agentId ?? '') ?? a.status, endedAt: at } : a)),
+  )
+  await publish($, { agents: next })
 }
 
 // The engine's figures as `$.session.usage()` and `session.measure` report them.
@@ -1327,15 +1396,19 @@ async function refreshBreakdown($: EngineInterface): Promise<void> {
           }
         : {}),
     }))
+    await publish($, {}, false)
   } catch {
     // No session bound or no breakdown on this host: the pane draws the plain fill.
   }
 }
 
-async function autoOpen($: EngineInterface, key: string): Promise<void> {
+// Opens the pane once per key: a flow's title, or the main turn a subagent started
+// in. Outside a flow it respects a person who closed the pane, until they open it.
+async function autoOpen($: EngineInterface, key: string, isFlow: boolean): Promise<void> {
   const p = await read($, panel)
-  if (p.autoOpenedFor === key) return
+  if (p.autoOpenedFor === key || (!isFlow && p.isAutoOff)) return
   await update($, panel, prev => ({ ...prev, autoOpenedFor: key }))
+  if (await isPaneShown($)) return
   void $.ui.open({ id: PANE, title: tr().pane })
 }
 
@@ -1412,30 +1485,20 @@ export const register: Register = (on, options) => {
     } catch {
       // No session figures on this host: the band shows the plugin's own estimate.
     }
-    const at0 = await $.clock.now()
-    await update($, now, () => at0)
-
-    // Every second while the pane is open; otherwise once a minute, which is all
-    // the band's coarse session time needs.
-    $.clock.every(1000, () => {
-      void (async () => {
-        const at = await $.clock.now()
-        const prev = await read($, now)
-        if (Math.floor(at / 60000) === Math.floor(prev / 60000) && !(await isPaneOpen($))) return
-        await update($, now, () => at)
-      })()
-    })
+    publishedAt = Number.NEGATIVE_INFINITY
+    await publish($)
+    $.clock.every(1000, () => void tick($))
     return started
   })
 
   // The engine's own figures: context fill, rate-limit windows, the /cost ledger.
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
-    await update($, meter, m => ({ ...m, ...meterFrom(e) }))
+    const mt = await update($, meter, m => ({ ...m, ...meterFrom(e) }))
+    await publish($, { meter: mt }, false)
     if (e.changed.includes('context')) {
       const at = await $.clock.now()
-      const m = await read($, meter)
-      if (at - (m.breakdownAt ?? 0) > 15000 && (await isPaneOpen($))) void refreshBreakdown($)
+      if (at - (mt.breakdownAt ?? 0) > 15000 && (await isPaneShown($))) void refreshBreakdown($)
     }
     return result
   })
@@ -1445,7 +1508,10 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (e.origin.kind !== 'task-notification') {
       const f = await read($, flow)
-      if (f?.isFinished) await update($, flow, () => null)
+      if (f?.isFinished) {
+        await update($, flow, () => null)
+        await publish($, { flow: null })
+      }
     }
     return next(e)
   })
@@ -1453,8 +1519,14 @@ export const register: Register = (on, options) => {
   // Main-loop turns only: a subagent's run raises no turn.start.
   on('turn.start', async ($, e, next) => {
     const at = await $.clock.now()
-    await update($, main, m => ({ ...m, turnStartedAt: at }))
-    await update($, now, () => at)
+    const m = await update($, main, prev => ({ ...prev, turnStartedAt: at, turnId: e.turnId }))
+    await publish($, { main: m }, false)
+    return next(e)
+  })
+
+  // The person closed the pane: subagents outside a flow no longer open it.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE && e.origin.kind === 'person') await update($, panel, prev => ({ ...prev, isAutoOff: true }))
     return next(e)
   })
 
@@ -1493,7 +1565,8 @@ export const register: Register = (on, options) => {
     // The agents list stays: it is the session's, and its runs carry their cost.
     const at = await $.clock.now()
     const next = await update($, flow, p => merge(p, input, at))
-    if (next && input.tasks?.length) await autoOpen($, next.title)
+    await publish($, { flow: next })
+    if (next && input.tasks?.length) await autoOpen($, next.title, true)
     return { result: `ok: ${label(next ?? blank())}` }
   })
 
@@ -1502,14 +1575,15 @@ export const register: Register = (on, options) => {
     const input = e as unknown as { done?: number; total?: number; note?: string }
     const agentId = e.agentId
     if (!agentId) return { result: 'ignored: only subagents report steps' }
-    await update($, agents, list =>
-      list.map(a => {
+    const list = await update($, agents, prev =>
+      prev.map(a => {
         if (a.agentId !== agentId) return a
         const total = Math.max(0, Math.round(input.total ?? a.stepTotal ?? 0))
         const done = Math.max(0, Math.round(input.done ?? a.stepDone ?? 0))
         return { ...a, stepTotal: total, stepDone: total ? Math.min(total, done) : done, stepNote: input.note?.trim() || undefined }
       }),
     )
+    await publish($, { agents: list }, false)
     return { result: 'ok' }
   })
 
@@ -1519,14 +1593,16 @@ export const register: Register = (on, options) => {
     if (!type.startsWith('savvy-')) return next(e)
 
     const at = await $.clock.now()
-    await update($, flow, prev => {
+    const started = await update($, flow, prev => {
       const base = prev && !prev.isFinished ? { ...blank(), ...prev } : { ...blank(), startedAt: at }
       return { ...base, running: base.running + 1, phase: base.phase === 'plan' ? 'delegate' : base.phase }
     })
+    await publish($, { flow: started })
     try {
       return await next(e)
     } finally {
-      await update($, flow, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev))
+      const ended = await update($, flow, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev))
+      await publish($, { flow: ended })
     }
   })
 
@@ -1538,7 +1614,7 @@ export const register: Register = (on, options) => {
 
     const at = await $.clock.now()
     const current = await read($, flow)
-    await update($, agents, list => {
+    const runs = await update($, agents, list => {
       // A round is a re-delegation within one flow; with no flow, within the session.
       const peers = current ? flowRuns(current, list) : list
       const round = 1 + peers.filter(a => norm(a.description) === norm(e.description) && e.description).length
@@ -1560,13 +1636,12 @@ export const register: Register = (on, options) => {
       }
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
-    await update($, now, () => at)
-    const f = await read($, flow)
-    const isActive = f !== null && !f.isFinished
-    // savvy workers open the panel; while a reported flow runs, any subagent does.
-    if (e.subagentType.startsWith('savvy-') || isActive) {
-      await autoOpen($, f && !f.isFinished ? f.title : 'savvy-flow')
-    }
+    await publish($, { agents: runs })
+    // A reported flow opens the panel once; any other subagent, the model's own
+    // choice included, opens it once per main turn.
+    if (current && !current.isFinished) await autoOpen($, current.title, true)
+    else if (e.subagentType.startsWith('savvy-')) await autoOpen($, 'savvy-flow', true)
+    else await autoOpen($, `turn:${(await read($, main)).turnId ?? ''}`, false)
     return started
   })
 
@@ -1582,7 +1657,7 @@ export const register: Register = (on, options) => {
       const split = splitOf(usage)
       const cost = costOf(model, usage)
       const name = modelName(model)
-      await update($, main, m => {
+      const m = await update($, main, m => {
         const prev = m.byModel?.[name] ?? { costUsd: 0, tokens: 0 }
         return {
           ...m,
@@ -1594,11 +1669,13 @@ export const register: Register = (on, options) => {
           byModel: { ...m.byModel, [name]: { costUsd: prev.costUsd + cost, tokens: prev.tokens + sumSplit(split) } },
         }
       })
+      await publish($, { main: m }, false)
       return result
     }
 
     const model = usage.model || e.model
-    await update($, agents, list =>
+    const status: AgentStatus = 'running'
+    const runs = await update($, agents, list =>
       list.map(a =>
         a.agentId !== agentId
           ? a
@@ -1606,7 +1683,7 @@ export const register: Register = (on, options) => {
               ...a,
               model,
               effort: typeof e.effort === 'string' ? e.effort : a.effort,
-              status: 'running',
+              status,
               endedAt: undefined,
               contextTokens:
                 (usage.input_tokens || 0) +
@@ -1626,6 +1703,7 @@ export const register: Register = (on, options) => {
             },
       ),
     )
+    await publish($, { agents: runs }, false)
     return result
   })
 
@@ -1633,14 +1711,15 @@ export const register: Register = (on, options) => {
     const agentId = e.agentId
     if (agentId) {
       const at = await $.clock.now()
-      await update($, agents, list =>
+      const status: AgentStatus = e.reason === 'answer' ? 'done' : 'failed'
+      const runs = await update($, agents, list =>
         list.map(a => {
           if (a.agentId !== agentId) return a
           // A run whose steps went unseen still gets the turn's own sum.
           const fallback = a.steps === 0 && e.usage
           return {
             ...a,
-            status: e.reason === 'answer' ? 'done' : 'failed',
+            status,
             endedAt: at,
             ...(fallback && e.usage
               ? {
@@ -1657,16 +1736,18 @@ export const register: Register = (on, options) => {
           }
         }),
       )
-      await update($, now, () => at)
+      await publish($, { agents: runs })
     } else {
       const at = await $.clock.now()
-      await update($, main, m => ({
+      const m = await update($, main, m => ({
         ...m,
         activeMs: (m.activeMs ?? 0) + Math.max(0, e.durationMs || (m.turnStartedAt ? at - m.turnStartedAt : 0)),
         turns: (m.turns ?? 0) + 1,
         turnStartedAt: undefined,
       }))
-      await update($, now, () => at)
+      await publish($, { main: m })
+      // The turn is over: a run still marked running may have been stopped silently.
+      if ((await read($, agents)).some(a => a.status === 'running')) await reconcile($)
     }
     return next(e)
   })
@@ -1675,12 +1756,9 @@ export const register: Register = (on, options) => {
     const s = tr()
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const list = await read($, agents)
-    const f = await read($, flow)
+    const { flow: f, agents: list, main: m, meter: mt, at: frameAt } = await read($, frame)
     const p: Panel = await read($, panel)
-    const m = await read($, main)
-    const mt = await read($, meter)
-    const at = Math.max(await read($, now), ...list.map(a => a.startedAt), 0)
+    const at = Math.max(frameAt, ...list.map(a => a.startedAt), 0)
 
     const running = list.filter(a => a.status === 'running').reverse()
     const finished = list.filter(a => a.status !== 'running').reverse()
@@ -1710,7 +1788,7 @@ export const register: Register = (on, options) => {
       />
     )
     const isEmpty = list.length === 0 && planned.length === 0
-    const summary = `${cost}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.sessionMs)}`
+    const summary = `${cost}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtSpan(t.sessionMs)}`
     const agentsHeader = (
       <Box key="agents-h" flexDirection="row" justifyContent="space-between" alignItems="center">
         <Text bold>
@@ -1843,7 +1921,7 @@ export const register: Register = (on, options) => {
           <Text bold>{cost}</Text>
           <Text dimColor>
             {' '}
-            {t.isLedger ? '/cost' : s.estimated} · {s.elapsed} {fmtTime(t.sessionMs)} · {s.active} {fmtTime(t.activeMs)}
+            {t.isLedger ? '/cost' : s.estimated} · {s.elapsed} {fmtSpan(t.sessionMs)} · {s.active} {fmtTime(t.activeMs)}
           </Text>
         </Text>
         <Text dimColor wrap="truncate-end">
@@ -1924,11 +2002,8 @@ export const register: Register = (on, options) => {
     const s = tr()
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const f = await read($, flow)
-    const list = await read($, agents)
-    const m = await read($, main)
-    const mt = await read($, meter)
-    const at = Math.max(await read($, now), 0)
+    const { flow: f, agents: list, main: m, meter: mt, at: frameAt } = await read($, frame)
+    const at = Math.max(frameAt, 0)
     const t = totals(list, at, m, mt)
     const isWorking = e.props.isWorking || list.some(a => a.status === 'running')
     const details = <Button key="savvy-details" label={s.details} plain dimColor onPress={() => void togglePane($)} />

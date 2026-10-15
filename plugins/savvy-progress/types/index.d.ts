@@ -31,6 +31,8 @@ export type MainUsage = {
   turns?: number
   /** Set while a main-loop turn runs. */
   turnStartedAt?: number
+  /** The main loop's current or last turn. */
+  turnId?: string
 }
 
 export type RateWindow = {
@@ -101,7 +103,23 @@ export type AgentRun = {
 export type Panel = {
   isCompact: boolean
   isDoneCollapsed: boolean
+  /** The flow title or main turn the panel last opened itself for. */
   autoOpenedFor: string
+  /** The person closed the panel: subagents outside a flow leave it closed until they open it. */
+  isAutoOff?: boolean
+}
+
+/**
+ * What the drawings read: a copy of the live values, published at most every two
+ * seconds while tokens stream in, so a press does not land on a retired handle.
+ */
+export type Frame = {
+  flow: Flow | null
+  agents: AgentRun[]
+  main: MainUsage
+  meter: Meter
+  /** The time the frame was taken. */
+  at: number
 }
 
 declare module 'claude-code' {
@@ -110,7 +128,7 @@ declare module 'claude-code' {
       flow: Flow | null
       agents: AgentRun[]
       panel: Panel
-      now: number
+      frame: Frame
       main: MainUsage
       meter: Meter
     }

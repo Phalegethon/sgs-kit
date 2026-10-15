@@ -13,7 +13,9 @@ test('planned rows name the model and the main loop is priced', { options: { lan
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   // The panel opens itself when a plan arrives; the engine would seat it.
   on('ui.open', async () => ({ value: { isPlaced: true as const } }))
-  on('clock.now', async () => ({ value: 1_000_000 }))
+  // A clock that moves, so the model request below gets a frame of its own.
+  let at = 1_000_000
+  on('clock.now', async () => ({ value: (at += 5000) }))
   // Bottom of turn.step: the model answers with usage; agentId absent means the main loop.
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: usage('claude-opus-5-5', 1000, 1000) }
