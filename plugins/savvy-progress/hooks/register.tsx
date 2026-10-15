@@ -115,6 +115,8 @@ const STRINGS = {
     routingUsage: 'Usage: /agent-routing on | off | explore <model> | general <model>, with model one of inherit, haiku, sonnet, opus, fable. inherit: the main session\'s model; opus: Opus whatever the main session runs on.',
     routingSet: 'Saved; new subagents use it:',
     routingDenied: 'Not saved',
+    inView: 'In view',
+    workflow: 'Workflow',
   },
   ru: {
     pane: 'Сессия',
@@ -182,6 +184,8 @@ const STRINGS = {
     routingUsage: 'Использование: /agent-routing on | off | explore <модель> | general <модель>, модель: inherit, haiku, sonnet, opus, fable. inherit: модель основной сессии; opus: Opus при любой модели основной сессии.',
     routingSet: 'Сохранено; новые субагенты используют это:',
     routingDenied: 'Не сохранено',
+    inView: 'В фокусе',
+    workflow: 'Воркфлоу',
   },
   tr: {
     pane: 'Oturum',
@@ -249,6 +253,8 @@ const STRINGS = {
     routingUsage: 'Kullanım: /agent-routing on | off | explore <model> | general <model>; model: inherit, haiku, sonnet, opus, fable. inherit: ana oturumun modeli; opus: ana oturum hangi modelde olursa olsun Opus.',
     routingSet: 'Kaydedildi; yeni alt ajanlar bunu kullanır:',
     routingDenied: 'Kaydedilmedi',
+    inView: 'Görüntülenen',
+    workflow: 'İş akışı',
   },
 } as const
 
@@ -1126,6 +1132,84 @@ const modelLabel = (a: AgentRun): string =>
 
 const ctxOf = (a: AgentRun): number => (a.contextMax ? Math.min(100, Math.round((a.contextTokens / a.contextMax) * 100)) : 0)
 
+// The run's meta line: its model, round, SendMessage address and failure.
+const runMeta = (a: AgentRun): string[] => {
+  const s = tr()
+  const meta = [modelLabel(a)]
+  if (a.round > 1) meta.push(`${s.round} ${a.round}`)
+  if (a.name) meta.push(`@${a.name}`)
+  if (a.status === 'failed') meta.push(s.failed)
+  return meta
+}
+
+// --- one state group's runs in drawing order: each run under the one that started
+// it (when that one is in the group too), and a workflow's agents in a section of
+// their own, in their script's order, after the conversation's own runs.
+
+type Row = { run: AgentRun; depth: number }
+type Section = { workflow?: string; rows: Row[] }
+
+const MAX_DEPTH = 3
+
+const arrange = (runs: AgentRun[]): Section[] => {
+  const ids = new Set(runs.flatMap(a => (a.agentId ? [a.agentId] : [])))
+  const kids = new Map<string, AgentRun[]>()
+  const roots: AgentRun[] = []
+  for (const a of runs) {
+    const p = a.parentAgentId
+    if (p && p !== a.agentId && ids.has(p)) kids.set(p, [...(kids.get(p) ?? []), a])
+    else roots.push(a)
+  }
+  const seen = new Set<string>()
+  const walk = (a: AgentRun, depth: number): Row[] => {
+    if (seen.has(a.id)) return []
+    seen.add(a.id)
+    const children = [...(kids.get(a.agentId ?? '') ?? [])].sort((x, y) => x.startedAt - y.startedAt)
+    return [{ run: a, depth: Math.min(depth, MAX_DEPTH) }, ...children.flatMap(c => walk(c, depth + 1))]
+  }
+  const plain = roots.filter(a => !a.workflowRunId).flatMap(a => walk(a, 0))
+  const sections: Section[] = plain.length ? [{ rows: plain }] : []
+  for (const id of new Set(roots.flatMap(a => (a.workflowRunId ? [a.workflowRunId] : [])))) {
+    const members = roots.filter(a => a.workflowRunId === id).sort((x, y) => (x.workflowIndex ?? 0) - (y.workflowIndex ?? 0))
+    sections.push({ workflow: id, rows: members.flatMap(a => walk(a, 0)) })
+  }
+  // Runs whose parents start each other reach no root: draw them flat rather than lose them.
+  const left = runs.filter(a => !seen.has(a.id)).flatMap(a => walk(a, 0))
+  if (left.length) sections.push({ rows: left })
+  return sections
+}
+
+const workflowLabel = (sec: Section): string => `${tr().workflow} ${sec.workflow} · ${sec.rows.length}`
+
+// The band's row for the agent whose transcript is in view, in place of the session's.
+const agentSegs = (a: AgentRun, at: number, k: number): Seg[] => {
+  const s = tr()
+  return [
+    figure('', clip(a.description || a.type, 32), 6),
+    figure('', modelLabel(a), 3),
+    figure(s.cost, `≈${fmtCost(a.costUsd * k)}`, 1),
+    gauge(s.context, ctxOf(a), 2),
+    figure(s.tokens, fmtTokens(a.tokens), 4),
+    figure(s.time, fmtTime(elapsed(a, at)), 5),
+  ]
+}
+
+// The run of the agent in view, when the panel saw it start (a remote agent it did not).
+const viewed = (list: AgentRun[], agentId: string | undefined): AgentRun | undefined =>
+  agentId ? list.find(a => a.agentId === agentId) : undefined
+
+const agentText = (a: AgentRun, at: number, k: number): string => {
+  const s = tr()
+  return [
+    a.description || a.type,
+    modelLabel(a),
+    `${s.cost} ≈${fmtCost(a.costUsd * k)}`,
+    `${s.context} ${fmtPct(ctxOf(a))}`,
+    `${s.tokens} ${fmtTokens(a.tokens)}`,
+    `${s.time} ${fmtTime(elapsed(a, at))}`,
+  ].join(' · ')
+}
+
 // --- the subagents card: one card stacked from several drawings (its header, group
 // labels and rows), each painting its own slice of the tile so they read as one, as
 // the cards above do. Rows sit flush; the first slice rounds the top corners and
@@ -1153,13 +1237,13 @@ const slice = (W: number, height: number, body: string) => (isFirst: boolean, is
 // A hairline between two rows of one group, inset as the card's text is.
 const rule = (W: number, isRuled: boolean): string => (isRuled ? `<line class="ln" x1="${PAD}" y1="0.5" x2="${W - PAD}" y2="0.5"/>` : '')
 
-const headPart = (W: number, right: string): Part => ({
-  key: 'agents-head',
-  alt: `${tr().subagents} ${right}`,
+const headPart = (W: number, right: string, title: string = tr().subagents, key = 'agents-head'): Part => ({
+  key,
+  alt: `${title} ${right}`,
   draw: slice(
     W,
     34,
-    `${txt(PAD, 22, tr().subagents, { size: 11.5, weight: 600, cls: 's' })}${right ? txt(W - PAD, 22, fitText(right, 11.5, W * 0.55), { size: 11.5, cls: 's', anchor: 'end', num: true }) : ''}`,
+    `${txt(PAD, 22, title, { size: 11.5, weight: 600, cls: 's' })}${right ? txt(W - PAD, 22, fitText(right, 11.5, W * 0.55), { size: 11.5, cls: 's', anchor: 'end', num: true }) : ''}`,
   ),
 })
 
@@ -1184,16 +1268,18 @@ ${txt(ROW_X, 37, fitText(s.emptyHint, 11, W - ROW_X - PAD), { size: 11, cls: 'm'
   }
 }
 
-const agentPart = (W: number, a: AgentRun, at: number, k: number, isRuled: boolean): Part => {
+// A nested run is drawn one step in per level, crab and text alike.
+const INDENT = 16
+
+const agentPart = (W: number, a: AgentRun, at: number, k: number, isRuled: boolean, depth = 0): Part => {
   const s = tr()
   const tier = tierOf(a.type)
   const color = colorOf(tier)
   const ctx = ctxOf(a)
   const right = W - PAD
-  const barW = right - ROW_X
-  const meta = [modelLabel(a)]
-  if (a.round > 1) meta.push(`${s.round} ${a.round}`)
-  if (a.status === 'failed') meta.push(s.failed)
+  const x0 = ROW_X + depth * INDENT
+  const barW = right - x0
+  const meta = runMeta(a)
   const progress = progressOf(a)
   const stats = `ctx ${fmtPct(ctx)} · ${fmtTokens(a.contextTokens)}  ≈${fmtCost(a.costUsd * k)}  ${fmtTime(elapsed(a, at))}`
   const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' · ' + a.stepNote : ''}` : ''
@@ -1206,12 +1292,12 @@ const agentPart = (W: number, a: AgentRun, at: number, k: number, isRuled: boole
     draw: slice(
       W,
       66,
-      `${rule(W, isRuled)}${crab(PAD - 4, 15, costumeOf(a.type), false, a.status === 'running')}
-${txt(ROW_X, 21, fitText(a.description || a.type, 13, barW - 22), { size: 13, weight: 600 })}
-<text x="${ROW_X}" y="37" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
-${steps && stepsW > 30 ? txt(ROW_X, 51, fitText(steps, 11, stepsW), { size: 11, num: true }) : ''}
+      `${rule(W, isRuled)}${crab(PAD - 4 + depth * INDENT, 15, costumeOf(a.type), false, a.status === 'running')}
+${txt(x0, 21, fitText(a.description || a.type, 13, barW - 22), { size: 13, weight: 600 })}
+<text x="${x0}" y="37" font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(tier === 'other' ? a.type : tier)}</tspan><tspan class="s">  ${xml(meta.join('  ·  '))}</tspan></text>
+${steps && stepsW > 30 ? txt(x0, 51, fitText(steps, 11, stepsW), { size: 11, num: true }) : ''}
 ${txt(right, 51, stats, { size: 11, cls: 's', anchor: 'end', num: true })}
-<rect class="k" x="${ROW_X}" y="57" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="${ROW_X}" y="57" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
+<rect class="k" x="${x0}" y="57" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="${x0}" y="57" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
 ${statusMark(right - 6, 17, a.status, color)}`,
     ),
   }
@@ -1633,6 +1719,9 @@ export const register: Register = (on, options) => {
         steps: 0,
         round,
         ...(routed ? { routedModel: routed } : {}),
+        ...(e.parentAgentId ? { parentAgentId: e.parentAgentId } : {}),
+        ...(e.workflow ? { workflowRunId: e.workflow.runId, workflowIndex: e.workflow.agentIndex } : {}),
+        ...(e.name ? { name: e.name } : {}),
       }
       return [...list.filter(a => a.id !== run.id), run].slice(-200)
     })
@@ -1768,6 +1857,8 @@ export const register: Register = (on, options) => {
     // The pane's title says "Session"; inside, only the flow's own name.
     const title = f && !f.isFinished ? f.title : ''
     const cost = (t.isLedger ? '' : '≈') + fmtCost(t.cost)
+    // The agent whose transcript the person opened from the tasks list leads the pane.
+    const focus = viewed(list, e.props.view?.agentId)
 
     const toggleCompact = (
       <Button
@@ -1811,21 +1902,32 @@ export const register: Register = (on, options) => {
       if (isEmpty) parts.push(emptyPart(W))
       else if (p.isCompact) parts.push(compactPart(W, list, planned, t))
       else {
-        if (running.length) parts.push(groupPart(W, 'g-run', `${s.running} · ${running.length}`))
-        running.forEach((a, i) => parts.push(agentPart(W, a, at, t.k, i > 0)))
+        const rows = (key: string, runs: AgentRun[]): Part[] =>
+          arrange(runs).flatMap(sec => [
+            ...(sec.workflow ? [groupPart(W, `${key}-${sec.workflow}`, workflowLabel(sec))] : []),
+            ...sec.rows.map((r, i) => agentPart(W, r.run, at, t.k, i > 0, r.depth)),
+          ])
+        if (running.length) parts.push(groupPart(W, 'g-run', `${s.running} · ${running.length}`), ...rows('run', running))
         if (finished.length) parts.push(groupPart(W, 'g-done', `${s.finished} · ${finished.length}`))
-        if (!p.isDoneCollapsed) finished.forEach((a, i) => parts.push(agentPart(W, a, at, t.k, i > 0)))
+        if (finished.length && !p.isDoneCollapsed) parts.push(...rows('done', finished))
         if (planned.length) parts.push(groupPart(W, 'g-plan', `${s.planned} · ${planned.length}`))
         planned.forEach((pl, i) => parts.push(plannedPart(W, pl, i > 0)))
       }
-      const agentsCard = (
-        <Box key="agents" flexDirection="column">
-          {parts.map((part, i) => {
-            const drawn = part.draw(i === 0, i === parts.length - 1)
+      const cardOf = (key: string, card: Part[]) => (
+        <Box key={key} flexDirection="column">
+          {card.map((part, i) => {
+            const drawn = part.draw(i === 0, i === card.length - 1)
             return <Svg key={part.key} source={drawn.source} alt={part.alt} width={W} height={drawn.height} />
           })}
         </Box>
       )
+      const agentsCard = cardOf('agents', parts)
+      const focusCard = focus
+        ? cardOf('focus', [
+            headPart(W, focus.status === 'running' ? s.isRunning : s.isFinished, s.inView, 'focus-head'),
+            { ...agentPart(W, focus, at, t.k, false), key: `focus-${focus.id}` },
+          ])
+        : null
       // The card's controls sit under it, from its left edge: text buttons, as Details is.
       const agentsControls = isEmpty ? null : (
         <Box key="agents-controls" flexDirection="row" gap={2}>
@@ -1849,6 +1951,7 @@ export const register: Register = (on, options) => {
               {title}
             </Text>
           ) : null}
+          {focusCard}
           <Svg source={heroSvg(W, t)} alt={`${s.sessionCost}: ${summary}`} width={W} height={HERO_H} />
           {mt.rateLimits.length > 0 && (
             <Svg source={limitsSvg(W, mt.rateLimits, at)} alt={`${s.limits}: ${limitsAlt}`} width={W} height={limitsHeight(mt.rateLimits.length)} />
@@ -1868,16 +1971,17 @@ export const register: Register = (on, options) => {
     // Terminal: the same content in text rows.
     const cols = Math.max(24, e.props.bodyColumns || 40)
     const barW = Math.max(6, Math.min(20, cols - 34))
-    const row = (a: AgentRun) => {
+    const row = (a: AgentRun, depth = 0) => {
+      const pad = '  '.repeat(depth)
       const tier = tierOf(a.type)
       const color = colorOf(tier)
       const ctx = ctxOf(a)
       const progress = progressOf(a)
-      const model = modelLabel(a)
       const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' ' + a.stepNote : ''} · ` : ''
       return (
         <Box key={a.id} flexDirection="column" marginBottom={1}>
           <Box flexDirection="row" gap={1}>
+            {depth ? <Text dimColor>{`${pad.slice(2)}↳`}</Text> : null}
             <Text color={color}>▣</Text>
             <Text bold wrap="truncate-end">
               {a.description || a.type}
@@ -1885,11 +1989,12 @@ export const register: Register = (on, options) => {
             <Text color={a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{STATUS_GLYPH[a.status]}</Text>
           </Box>
           <Text dimColor wrap="truncate-end">
+            {pad}
             {'  '}
-            {tier === 'other' ? a.type : tier} · {model}
-            {a.round > 1 ? ` · ${s.round} ${a.round}` : ''}
+            {tier === 'other' ? a.type : tier} · {runMeta(a).join(' · ')}
           </Text>
           <Text wrap="truncate-end">
+            {pad}
             {'  '}
             {progress === null ? <Text dimColor>{ctxBar(ctx, barW)}</Text> : <Text color={color}>{ctxBar(progress * 100, barW)}</Text>}
             <Text dimColor>
@@ -1900,6 +2005,13 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
+    const textRows = (key: string, runs: AgentRun[]) =>
+      arrange(runs).map((sec, i) => (
+        <Box key={`${key}-${sec.workflow ?? i}`} flexDirection="column">
+          {sec.workflow ? <Text dimColor>{workflowLabel(sec)}</Text> : null}
+          {sec.rows.map(r => row(r.run, r.depth))}
+        </Box>
+      ))
     const labelW = Math.max(...mt.rateLimits.map(r => rateLabel(r.kind, true).length), s.context.length)
     const gaugeRow = (key: string, name: string, pct: number, note: string) => (
       <Text key={key} wrap="truncate-end">
@@ -1916,6 +2028,14 @@ export const register: Register = (on, options) => {
           <Text bold wrap="truncate-end">
             {title}
           </Text>
+        ) : null}
+        {focus ? (
+          <Box key="focus" flexDirection="column">
+            <Text bold color={ACCENT}>
+              {s.inView}
+            </Text>
+            {row(focus)}
+          </Box>
         ) : null}
         <Text wrap="truncate-end">
           <Text bold>{cost}</Text>
@@ -1969,9 +2089,9 @@ export const register: Register = (on, options) => {
           ) : (
             <Box flexDirection="column">
               {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
-              {running.map(row)}
+              {running.length > 0 && textRows('run', running)}
               {finished.length > 0 && toggleDone}
-              {!p.isDoneCollapsed && finished.map(row)}
+              {finished.length > 0 && !p.isDoneCollapsed && textRows('done', finished)}
               {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}
               {planned.map(pl => {
                 const tier = pl.tier in TIER_COLOR ? pl.tier : 'other'
@@ -2006,6 +2126,11 @@ export const register: Register = (on, options) => {
     const at = Math.max(frameAt, 0)
     const t = totals(list, at, m, mt)
     const isWorking = e.props.isWorking || list.some(a => a.status === 'running')
+    // While one agent's transcript is in view the stats row is that agent's.
+    const focus = viewed(list, e.props.view?.agentId)
+    const segs = focus ? agentSegs(focus, at, t.k) : bandSegs(t, m, mt)
+    const statsAlt = focus ? agentText(focus, at, t.k) : bandText(t, m, mt)
+    const isBusy = focus ? focus.status === 'running' : isWorking
     const details = <Button key="savvy-details" label={s.details} plain dimColor onPress={() => void togglePane($)} />
 
     // The flow's own crew: its runs and the tasks still planned. Details opens the panel.
@@ -2021,11 +2146,11 @@ export const register: Register = (on, options) => {
       // lines up with the flow row's end. No floor above the slot: a row wider would wrap.
       const cols = e.props.bodyColumns || 100
       const flowW = Math.max(180, Math.min(1600, cols * 8 - 16))
-      const stats = statsSvg(Math.max(180, Math.min(1600, cols * 8 - 120)), bandSegs(t, m, mt), isWorking)
+      const stats = statsSvg(Math.max(180, Math.min(1600, cols * 8 - 120)), segs, isBusy)
       return (
         <Box flexDirection="column">
           <Box key="savvy-stats" flexDirection="row" alignItems="center" justifyContent="space-between" gap={1}>
-            <Svg source={stats.source} alt={bandText(t, m, mt)} width={stats.width} height={H} />
+            <Svg source={stats.source} alt={statsAlt} width={stats.width} height={H} />
             {details}
           </Box>
           {f && (
@@ -2045,10 +2170,10 @@ export const register: Register = (on, options) => {
     const cols = e.props.bodyColumns
     const statsRow = (
       <Box key="savvy-stats" flexDirection="row" gap={1}>
-        <Text color={isWorking ? ACCENT : DONE}>●</Text>
+        <Text color={isBusy ? ACCENT : DONE}>●</Text>
         <Box flexGrow={1} flexShrink={1}>
           <Text dimColor wrap="truncate-end">
-            {bandText(t, m, mt)}
+            {statsAlt}
           </Text>
         </Box>
         {details}

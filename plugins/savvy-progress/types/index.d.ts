@@ -94,6 +94,13 @@ export type AgentRun = {
   split?: TokenSplit
   /** The model routing gave the run, when the Agent call named none (`exploreModel`, `generalModel`). */
   routedModel?: string
+  /** The run whose loop started this one; absent when the main loop did. */
+  parentAgentId?: string
+  /** The workflow run (`wf_...`) and the agent's place in it, for a workflow's agent. */
+  workflowRunId?: string
+  workflowIndex?: number
+  /** What SendMessage addresses it by, when the call named it. */
+  name?: string
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number
